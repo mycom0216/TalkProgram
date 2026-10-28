@@ -56,14 +56,23 @@ var fileRepository = new FileRepository(db);
 int schema = db.SchemaVersion();
 if (schema < Db.RequiredSchemaVersion)
 {
-    log.Error($"DB가 오래된 버전입니다(현재 {schema}, 필요 {Db.RequiredSchemaVersion}). 아래 스크립트를 root로 실행한 뒤 서버를 다시 켜세요:");
-    if (schema < 9)
+    log.Error($"DB 스키마가 오래되었습니다(현재 {schema}, 필요 {Db.RequiredSchemaVersion}). 현재 버전 다음부터 순서대로 적용하세요:");
+    var migrations = new Dictionary<int, string>
     {
-        log.Error(@"  009는 db\preview_009_utc_timestamps.sql을 먼저 검토하고 전체 백업 및 저장 시간대 확인 후 적용하세요.");
-        log.Error(@"  db\migrate_009_utc_timestamps.sql");
+        [2] = "migrate_002_files.sql", [3] = "migrate_003_status.sql", [4] = "migrate_004_admin.sql",
+        [5] = "migrate_005_rooms_messages.sql", [6] = "migrate_006_room_notices.sql", [7] = "migrate_007_message_edit.sql",
+        [8] = "migrate_008_login_tokens.sql", [9] = "migrate_009_utc_timestamps.sql", [10] = "migrate_010_device_login_tokens.sql",
+    };
+    for (int version = Math.Max(schema + 1, 2); version <= Db.RequiredSchemaVersion; version++)
+    {
+        if (version == 9)
+        {
+            log.Error(@"  009 전에 db\preview_009_utc_timestamps.sql을 확인하고 전체 백업을 만드세요.");
+            log.Error(@"  009는 기존 시각대에 맞게 offset/확인 변수를 설정하지 않으면 적용되지 않습니다.");
+        }
+        log.Error($"  db\\{migrations[version]}");
     }
-    log.Error(@"  db\migrate_010_device_login_tokens.sql (009까지 먼저 적용)");
-    log.Error(@"  예) ""C:\Program Files\MariaDB 13.0\bin\mysql.exe"" -u root -p chatapp < db\migrate_010_device_login_tokens.sql");
+    log.Error(@"명령 프롬프트(CMD)에서 프로젝트 폴더로 이동한 뒤 위 파일을 한 개씩 순서대로 실행하세요. PowerShell은 < 입력 리디렉션을 지원하지 않습니다.");
     // [왜] 그대로 켜면 메시지 저장이 칸 없음 오류로 계속 실패한다(대화가 조용히 사라짐). 여기서 멈추는 편이 안전하다.
     Environment.ExitCode = 1;
     return;
