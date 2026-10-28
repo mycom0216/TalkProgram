@@ -51,7 +51,10 @@ public sealed class MessageStore : IDisposable
     private abstract record Job;
     private sealed record SaveJob(StoredMessage Message) : Job;
     // Before = 요청한 시각. 이 시각 "이전" 메시지만 기록으로 보낸다. 이후 메시지는 실시간 패킷으로 받으므로 중복을 줄인다.
-    private sealed record HistoryJob(ClientSession Session, int? RoomId, string? Me, string? Peer, DateTime Before) : Job;
+    // Since = 이 시각 이전 메시지는 주지 않는다(나중에 들어온 방 멤버는 들어오기 전 대화를 보지 못한다).
+    private sealed record HistoryJob(ClientSession Session, int? RoomId, string? Me, string? Peer, DateTime Before, DateTime? Since = null, string? BeforeKey = null) : Job;
+    // 그 밖의 DB 작업(읽음 위치 저장, 삭제 표시, 공감 등). 같은 큐에서 순서대로 처리되므로 "저장 → 삭제" 순서가 뒤바뀌지 않는다.
+    private sealed record ActionJob(string Name, Action Work) : Job;
 
     // [개념] const: 컴파일할 때 값이 박히는 상수. 바뀌지 않는 설정값에 쓴다.
     private const int MaxBatch = 200;                  // 한 트랜잭션에 저장할 최대 메시지 수
@@ -70,11 +73,69 @@ public sealed class MessageStore : IDisposable
     private readonly Thread _thread;
 
     /// <param name="loadThumbnail">파일 저장 경로 → 미리보기 바이트 (FileService.ReadThumbnail)</param>
+    // ── 메시지 번호 발급 ──
+    // [왜] 메시지 번호(MessageId)는 "보내는 순간" 필요하다(받는 사람이 그 번호로 답장·삭제·공감을 한다).
+    //      DB의 AUTO_INCREMENT는 저장한 뒤에야 알 수 있는데 저장은 이 스레드가 나중에 하므로, 서버가 직접 발급한다.
+    //      시작할 때 DB의 가장 큰 번호를 읽어 그다음부터 Interlocked로 1씩 늘린다(여러 수신 스레드가 동시에 받아도 겹치지 않음).
+    private long _lastId;
+
+    /// <summary>새 메시지 번호 (여러 스레드에서 동시에 불러도 겹치지 않는다).</summary>
+    public long NextId() => Interlocked.Increment(ref _lastId);
+
+    // ── 최근 메시지 기억 (답장·삭제·공감 권한 확인용) ──
+    // [왜] 방금 보낸 메시지는 아직 DB에 저장되기 전일 수 있다(큐에서 기다리는 중). 그래서 최근 메시지는 메모리에서 먼저 찾고,
+    //      없을 때만 DB를 본다. 메모리가 무한히 커지지 않게 최근 RecentLimit개만 기억한다.
+    private const int RecentLimit = 20_000;
+    private readonly ConcurrentDictionary<long, MessageMeta> _recent = new();
+    private readonly ConcurrentQueue<long> _recentOrder = new();
+
+    /// <summary>방금 보낸 메시지를 기억한다.</summary>
+    public void Remember(MessageMeta meta)
+    {
+        _recent[meta.Id] = meta;
+        _recentOrder.Enqueue(meta.Id);
+        while (_recentOrder.Count > RecentLimit && _recentOrder.TryDequeue(out long old)) _recent.TryRemove(old, out _);
+    }
+
+    /// <summary>메시지 찾기: 최근 것은 메모리, 아니면 DB. 없으면 null. [스레드] 요청한 사람의 수신 스레드에서 DB를 읽을 수 있다.</summary>
+    public MessageMeta? Find(long messageId)
+    {
+        if (_recent.TryGetValue(messageId, out MessageMeta? meta)) return meta;
+        try { return _repository.Find(messageId); }
+        catch (DbException ex)
+        {
+            _log.Error($"메시지 찾기 실패({messageId}): {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>기억해 둔 메시지를 삭제됨으로 바꾼다.</summary>
+    public void ForgetContent(long messageId)
+    {
+        if (_recent.TryGetValue(messageId, out MessageMeta? meta)) _recent[messageId] = meta with { Deleted = true };
+    }
+
+    public void UpdateContent(long messageId, string content)
+    {
+        if (_recent.TryGetValue(messageId, out MessageMeta? meta))
+            _recent[messageId] = meta with { Content = content, Edited = true };
+    }
+
     public MessageStore(MessageRepository repository, Func<string, byte[]?> loadThumbnail, ServerLogger log)
     {
         _repository = repository;
         _loadThumbnail = loadThumbnail;
         _log = log;
+        try
+        {
+            _lastId = repository.MaxMessageId();
+        }
+        catch (DbException ex)
+        {
+            // DB를 못 읽으면 "지금 시각(밀리초) × 1000"부터 시작해 예전 번호와 겹치지 않게 한다
+            _lastId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000;
+            log.Error($"마지막 메시지 번호를 읽지 못해 {_lastId}부터 시작합니다: {ex.Message}");
+        }
         // [개념] new Thread(Run): Run 메서드를 새 스레드에서 실행. 생성자에서 바로 시작해 서버가 켜지면 항상 대기 중이다.
         // [왜] Name을 붙이면 로그([T n])와 Visual Studio 디버거의 스레드 창에서 어떤 스레드인지 바로 알 수 있다.
         _thread = new Thread(Run) { IsBackground = true, Name = "DbWriter" };
@@ -86,13 +147,36 @@ public sealed class MessageStore : IDisposable
     public void Save(StoredMessage message) => TryAdd(new SaveJob(message));
 
     /// <summary>방 지난 대화를 session에게 보내도록 예약. 지금 시각 이전 것만 보낸다(이후 것은 실시간으로 받으므로).</summary>
-    public void RequestRoomHistory(ClientSession session, int roomId)
+    public void RequestRoomHistory(ClientSession session, int roomId, DateTime? since = null, DateTime? before = null, string? beforeKey = null)
         // [왜] 기록을 어느 세션에게 보낼지(session)를 작업에 같이 담아 둔다. DbWriter 스레드가 읽은 뒤 그 세션의 송신 큐에 넣는다.
-        => TryAdd(new HistoryJob(session, roomId, null, null, DateTime.Now));
+        => TryAddHistory(new HistoryJob(session, roomId, null, null, before ?? DateTime.UtcNow, since, beforeKey));
+
+    /// <summary>
+    /// DB 작업을 큐에 넣는다 (읽음 위치 저장, 삭제 표시, 공감 등). 저장 작업과 같은 큐라 들어온 순서대로 처리된다.
+    /// </summary>
+    // [예] A가 메시지를 보내자마자 삭제하면: 저장 작업 → 삭제 작업 순서로 큐에 들어가므로, 없는 메시지를 지우려는 일이 생기지 않는다.
+    public void Enqueue(string name, Action work) => TryAdd(new ActionJob(name, work));
 
     /// <summary>1:1 지난 대화를 session에게 보내도록 예약.</summary>
-    public void RequestDirectHistory(ClientSession session, string me, string peer)
-        => TryAdd(new HistoryJob(session, null, me, peer, DateTime.Now));
+    public void RequestDirectHistory(ClientSession session, string me, string peer, DateTime? before = null, string? beforeKey = null)
+        => TryAddHistory(new HistoryJob(session, null, me, peer, before ?? DateTime.UtcNow, null, beforeKey));
+
+    /// <summary>한 사람이 동시에 기다릴 수 있는 지난 대화 요청 수.</summary>
+    // [왜] 지난 대화 1번 = DB 읽기 + 최대 수 MB(사진 미리보기). 같은 요청을 1초에 수백 번 보내면
+    //      DbWriter 스레드가 그 일만 하느라 다른 사람의 대화 저장이 밀리고, 서버 메모리도 크게 쓴다.
+    //      로그인 직후 참여한 방이 여러 개면 한꺼번에 요청이 오므로 넉넉히 두되 무한정은 막는다.
+    private const int MaxPendingHistoryPerSession = 20;
+
+    private void TryAddHistory(HistoryJob job)
+    {
+        if (Interlocked.Increment(ref job.Session.PendingHistory) > MaxPendingHistoryPerSession)
+        {
+            Interlocked.Decrement(ref job.Session.PendingHistory);
+            _log.Info($"[{job.Session.Id}] 지난 대화 요청이 너무 많아 무시합니다.");
+            return;
+        }
+        TryAdd(job);
+    }
 
     private void TryAdd(Job job)
     {
@@ -124,6 +208,18 @@ public sealed class MessageStore : IDisposable
                 if (_queue.Count > 0 && batch.Count < MaxBatch) continue;
                 Flush(batch);
             }
+            else if (job is ActionJob action)
+            {
+                Flush(batch); // 순서 보장: 앞에 쌓인 메시지를 먼저 저장한다 (방금 보낸 메시지를 삭제·공감하는 경우)
+                try
+                {
+                    action.Work();
+                }
+                catch (Exception ex)
+                {
+                    _log.Error($"DB 작업 실패({action.Name}): {ex.Message}");
+                }
+            }
             else if (job is HistoryJob history)
             {
                 // [주의] FIFO 큐 순서 보장이 이 설계의 핵심이다.
@@ -131,7 +227,19 @@ public sealed class MessageStore : IDisposable
                 //   큐는 들어온 순서대로 처리되므로, B의 불러오기를 처리하기 전에 "안녕"이 반드시 DB에 저장되어 있다.
                 //   그래서 B는 입장 직전 메시지도 놓치지 않는다.
                 Flush(batch); // 순서 보장: 앞에 쌓인 메시지를 먼저 저장하고 나서 읽는다
-                SendHistory(history);
+                try
+                {
+                    SendHistory(history);
+                }
+                catch (Exception ex)
+                {
+                    // [주의] 이 스레드가 예외로 죽으면 이후 모든 대화 저장이 멈추고(큐만 쌓임) 서버도 종료된다. 반드시 여기서 잡는다.
+                    _log.Error($"지난 대화 보내기 실패: {ex.Message}");
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref history.Session.PendingHistory);
+                }
             }
         }
         // [개념] foreach가 끝나는 때 = Dispose()에서 CompleteAdding을 부르고 큐가 완전히 빈 뒤. 즉 서버 종료 시점이다.
@@ -146,10 +254,27 @@ public sealed class MessageStore : IDisposable
         {
             _repository.InsertMany(batch);
         }
+        catch (DbException ex) when (batch.Count > 1)
+        {
+            // [왜] 묶음 저장은 트랜잭션 하나라서, 200개 중 1개만 문제가 있어도 200개가 모두 롤백된다.
+            //      한 개씩 다시 저장해서 "문제 있는 메시지만" 버리고 나머지는 살린다.
+            _log.Error($"대화 묶음 저장 실패 ({batch.Count}개), 한 개씩 다시 시도: {ex.Message}");
+            int lost = 0;
+            foreach (StoredMessage message in batch)
+            {
+                try { _repository.InsertMany([message]); }
+                catch (DbException) { lost++; }
+            }
+            if (lost > 0) _log.Error($"대화 {lost}개를 저장하지 못했습니다.");
+        }
         catch (DbException ex)
         {
             // DB가 꺼져 있어도 채팅 자체는 계속 되어야 하므로 기록만 포기하고 로그를 남긴다
             _log.Error($"대화 저장 실패 ({batch.Count}개): {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"대화 저장 중 예상치 못한 오류 ({batch.Count}개): {ex.Message}");
         }
         batch.Clear();
     }
@@ -160,12 +285,15 @@ public sealed class MessageStore : IDisposable
         if (job.Session.IsClosed) return; // 그사이 나간 사람
 
         List<HistoryRow> rows;
+        DateTime? peerRead = null;
         try
         {
             // 방 번호가 있으면 방 기록, 없으면 1:1 기록 (job.Me!, job.Peer!: 1:1 작업이면 둘 다 반드시 채워져 있다)
             rows = job.RoomId is int roomId
-                ? _repository.LoadRoom(roomId, job.Before, HistoryBatch.Limit)
-                : _repository.LoadDirect(job.Me!, job.Peer!, job.Before, HistoryBatch.Limit);
+                ? _repository.LoadRoom(roomId, job.Before, HistoryBatch.Limit, job.Since, job.BeforeKey)
+                : _repository.LoadDirect(job.Me!, job.Peer!, job.Before, HistoryBatch.Limit, job.BeforeKey);
+            // 1:1이면 상대가 어디까지 읽었는지도 함께 보낸다 (내 메시지 옆 "1" 표시)
+            if (job.RoomId is null) peerRead = _repository.GetDirectRead(job.Peer!, job.Me!);
         }
         catch (DbException ex)
         {
@@ -183,32 +311,36 @@ public sealed class MessageStore : IDisposable
         }
 
         // 크기를 대략 계산해 가며 여러 묶음으로 나눈다 (미리보기 사진이 많으면 패킷 하나에 다 안 들어감)
-        var current = NewBatch(job);
+        var current = NewBatch(job, peerRead);
         int size = 0;
         foreach (HistoryRow row in rows)
         {
             // [개념] 패킷 크기 어림셈: 기본 300바이트 + 한글은 UTF-8로 글자당 최대 3바이트 + 미리보기는 Base64로 바뀌면 4/3배로 커진다.
             // [왜] 패킷 하나는 최대 1MB(PacketSerializer.MaxBodySize)라서, 사진 미리보기가 여러 장이면 한 패킷에 다 못 담는다.
             //   약 600KB를 넘기 전에 지금 묶음을 보내고 새 묶음을 시작한다.
-            int itemSize = 300 + row.Item.Body.Length * 3 + (row.Item.File?.Thumbnail?.Length ?? 0) * 4 / 3;
+            int itemSize = 300 + row.Item.Body.Length * 3 + (row.Item.File?.Thumbnail?.Length ?? 0) * 4 / 3
+                           + (row.Item.ReplyTo?.Text.Length ?? 0) * 3                                      // 답장 인용
+                           + (row.Item.Reactions?.Sum(x => 20 + x.EmployeeNos.Count * 25) ?? 0);         // 공감한 사람 목록
             if (current.Items.Count > 0 && size + itemSize > MaxHistoryPacketBytes)
             {
                 // 아직 뒤에 묶음이 더 있다는 표시 → 클라이언트는 Last = true가 올 때까지 모아 둔다
                 current.Last = false;
                 // [스레드] Send는 세션의 송신 큐에 넣기만 하므로 DbWriter 스레드가 네트워크 때문에 멈추지 않는다.
                 job.Session.Send(Packet.Create(PacketType.History).WithData(current));
-                current = NewBatch(job);
+                current = NewBatch(job, peerRead);
                 size = 0;
             }
             current.Items.Add(row.Item);
             size += itemSize;
         }
         // 마지막 묶음 (기록이 하나도 없어도 Last = true인 빈 묶음을 보내 "불러오기 끝"을 알린다)
+        current.HasMore = rows.Count >= HistoryBatch.Limit;
         job.Session.Send(Packet.Create(PacketType.History).WithData(current));
     }
 
     /// <summary>빈 묶음 하나 만들기. 기본값은 Last = true(마지막 묶음).</summary>
-    private static HistoryBatch NewBatch(HistoryJob job) => new() { RoomId = job.RoomId, PeerNo = job.Peer, Last = true };
+    private static HistoryBatch NewBatch(HistoryJob job, DateTime? peerRead)
+        => new() { RoomId = job.RoomId, PeerNo = job.Peer, Last = true, PeerLastReadAt = peerRead };
 
     /// <summary>서버 종료 시: 더 받지 않고, 남은 저장을 마칠 때까지 최대 5초 기다린다.</summary>
     public void Dispose()

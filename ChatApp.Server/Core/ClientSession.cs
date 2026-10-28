@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Net.Sockets;
@@ -77,11 +78,31 @@ public sealed class ClientSession
 
     /// <summary>상대 주소 "IP:포트" (로그용).</summary>
     public string RemoteEndPoint { get; }
+    public bool IsTls => _stream is SslStream;
 
     /// <summary>로그인한 사용자 정보. 로그인 전에는 null.</summary>
     // [개념] internal set: 읽기는 누구나, 쓰기는 같은 프로젝트 안(SessionManager.TryLogin)에서만.
     public UserInfo? User { get; internal set; }
     public bool IsLoggedIn => User is not null;
+    internal long LastTypingTicks;
+
+    private readonly object _userLock = new();
+
+    /// <summary>
+    /// 로그인 정보를 "읽고 → 고쳐서 → 바꿔 끼우기". 두 스레드가 동시에 고쳐도 한쪽 변경이 사라지지 않는다.
+    /// </summary>
+    // [주의] 예) 관리자가 권한을 해제하는 순간(관리자 스레드) 본인이 상태를 "회의 중"으로 바꾸면(본인 수신 스레드),
+    //        둘 다 옛 UserInfo를 읽고 각자 새 객체를 만들어 끼운다. 늦게 끼운 쪽이 이기므로 권한 해제가 사라질 수 있다.
+    //        lock으로 "읽기~끼우기"를 한 덩어리로 만들면 두 변경이 차례로 적용된다.
+    public UserInfo? UpdateUser(Func<UserInfo, UserInfo> change)
+    {
+        lock (_userLock)
+        {
+            if (User is null) return null;
+            User = change(User);
+            return User;
+        }
+    }
 
     /// <summary>
     /// 임시 비밀번호로 로그인해서 아직 비밀번호를 바꾸지 않은 상태. 이 동안은 비밀번호 변경·핑·로그아웃만 할 수 있다.
@@ -109,7 +130,25 @@ public sealed class ClientSession
     public long SilentMilliseconds => Environment.TickCount64 - Interlocked.Read(ref _lastReceivedTicks);
 
     // [스레드] Accept 스레드에서 실행된다. 여기서는 스레드 객체만 만들고, 실제 시작은 Start()에서.
-    public ClientSession(TcpClient client, PacketHandler handler, SslStreamCertificateContext? tls = null)
+    // ── 보호 장치 (ServerConfig에서 받는 값) ──
+    private readonly long _maxQueuedBytes;
+    // 일반 큐에 쌓여 아직 보내지 못한 바이트 수 (여러 스레드가 Interlocked로 더하고, 송신 스레드가 뺀다)
+    private long _queuedBytes;
+
+    /// <summary>진행 중인 지난 대화 요청 수 (MessageStore가 늘리고 줄인다). 같은 요청을 연달아 보내 서버를 괴롭히는 것을 막는다.</summary>
+    internal int PendingHistory;
+
+    /// <summary>마지막 검색 시각 (검색 간격 제한용, Interlocked로 읽고 쓴다).</summary>
+    internal long LastSearchTicks;
+
+    /// <summary>접속한 시각 (Environment.TickCount64). 로그인 제한 시간 확인용.</summary>
+    public long ConnectedTicks { get; } = Environment.TickCount64;
+
+    /// <summary>상대 IP (IP당 연결 수 제한용). 알 수 없으면 null.</summary>
+    public IPAddress? RemoteAddress { get; }
+
+    public ClientSession(TcpClient client, PacketHandler handler, SslStreamCertificateContext? tls = null,
+                         long maxQueuedBytes = 64L * 1024 * 1024, int sendTimeoutMs = 120_000)
     {
         // [개념] Interlocked.Increment: "읽고 +1 하고 쓰기"를 쪼갤 수 없는 한 동작(원자적)으로 한다.
         //        _nextId++ 는 읽기/더하기/쓰기 3단계라, 두 스레드가 동시에 하면 같은 번호가 나올 수 있다.
@@ -121,6 +160,11 @@ public sealed class ClientSession
         _handler = handler;
         // [개념] ?. 와 ?? : RemoteEndPoint가 null이면 ToString()을 부르지 않고 "unknown"을 쓴다.
         RemoteEndPoint = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
+        RemoteAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
+        _maxQueuedBytes = maxQueuedBytes;
+        // [왜] 쓰기 제한 시간: 상대가 데이터를 전혀 읽지 않으면 OS 송신 버퍼가 차서 Write가 영원히 멈춘다.
+        //      시간을 정해 두면 그 뒤 IOException이 나서 송신 스레드가 끝나고 연결이 정리된다.
+        client.SendTimeout = sendTimeoutMs;
 
         _receiveThread = new Thread(ReceiveLoop) { IsBackground = true, Name = $"Session-{Id}" };
         _sendThread = new Thread(SendLoop) { IsBackground = true, Name = $"Send-{Id}" };
@@ -240,9 +284,10 @@ public sealed class ClientSession
                 // [개념] TakeFromAny: 여러 큐 중 "꺼낼 것이 있는 큐"에서 하나를 꺼낸다. 모두 비었으면 기다린다.
                 //        배열 앞쪽 큐부터 확인하므로 일반 큐(채팅)가 파일 큐보다 우선 처리된다(간단한 우선순위 큐).
                 //        _closing.Token이 취소되면 기다리던 중이라도 OperationCanceledException으로 빠져나온다.
-                BlockingCollection<Packet>.TakeFromAny(queues, out Packet? packet, _closing.Token);
+                int from = BlockingCollection<Packet>.TakeFromAny(queues, out Packet? packet, _closing.Token);
                 // [개념] packet! : "여기서 null이 아님을 내가 보장한다"고 컴파일러에게 알리는 표시(null-forgiving).
                 NetworkHelper.WritePacket(_stream, packet!);
+                if (from == 0) Interlocked.Add(ref _queuedBytes, -packet!.ToWireBytes().Length); // 보냈으니 대기 바이트에서 뺀다
                 // SendAndClose로 넣은 "마지막 패킷"을 보냈으면 연결을 닫는다
                 if (ReferenceEquals(packet, Volatile.Read(ref _lastPacket))) break;
             }
@@ -281,11 +326,32 @@ public sealed class ClientSession
     public void Send(Packet packet)
     {
         if (IsClosed) return;
+        int size;
+        try
+        {
+            // [왜] 여기서 바이트로 바꿔 크기를 잰다. 같은 패킷을 여러 명에게 보낼 때는 처음 한 번만 변환된다(캐시).
+            size = packet.ToWireBytes().Length;
+        }
+        catch (InvalidDataException ex)
+        {
+            // 패킷이 최대 크기(1MB)를 넘음 = 서버 버그. 연결을 끊지 않고 이 패킷만 버린다.
+            _handler.Log.Error($"[{Id}] 너무 큰 패킷이라 보내지 않음 ({packet.Type}): {ex.Message}");
+            return;
+        }
         try
         {
             _queue.Add(packet); // 용량 제한이 없는 큐라 기다리지 않고 바로 들어간다
         }
         catch (InvalidOperationException) { return; } // 닫히는 중
+
+        // [주의] 개수만 세면, 큰 패킷(사진 미리보기가 든 지난 대화 등)이 쌓일 때 개수 한도 전에 메모리가 먼저 바닥난다.
+        //        그래서 "쌓인 바이트 수"도 함께 센다.
+        if (Interlocked.Add(ref _queuedBytes, size) > _maxQueuedBytes)
+        {
+            _handler.Log.Error($"[{Id}] 보내지 못한 데이터가 {_maxQueuedBytes / (1024 * 1024)}MB를 넘어 연결을 끊습니다(받지 않는 클라이언트).");
+            Close();
+            return;
+        }
 
         // [주의] 상대가 데이터를 전혀 읽지 않으면(프로그램이 멈춤 등) 큐가 끝없이 커져 서버 메모리가 바닥난다.
         //        일정 개수를 넘으면 "응답 없는 클라이언트"로 보고 끊어서 서버를 보호한다.
@@ -331,10 +397,20 @@ public sealed class ClientSession
         //        OnDisconnected(퇴장 알림 등)가 두 번 실행되는 경쟁 상태가 생긴다.
         if (Interlocked.Exchange(ref _closed, 1) == 1) return; // 이미 닫힘
 
-        _closing.Cancel(); // 송신 스레드를 깨워 끝낸다
-        _stream.Close();   // 수신 스레드의 ReadPacket을 깨워 끝낸다
-        _client.Close();
-        _handler.OnDisconnected(this); // 접속자 목록·방에서 빼고 다른 사람에게 퇴장 알림
+        // [주의] Close는 수신 스레드의 finally, 하트비트 스레드, 타이머 콜백 등에서 불린다.
+        //        이런 곳에서 잡히지 않은 예외가 나면 .NET은 "서버 프로세스 전체"를 종료한다.
+        //        정리 도중 무엇이 실패하든(디스크 가득 참 등) 나머지 정리는 계속하고 로그만 남긴다.
+        try { _closing.Cancel(); } catch (Exception ex) { LogCloseError("송신 중지", ex); } // 송신 스레드를 깨워 끝낸다
+        try { _stream.Close(); } catch (Exception ex) { LogCloseError("스트림 닫기", ex); } // 수신 스레드의 ReadPacket을 깨워 끝낸다
+        try { _client.Close(); } catch (Exception ex) { LogCloseError("소켓 닫기", ex); }
+        try { _handler.OnDisconnected(this); } // 접속자 목록·방에서 빼고 다른 사람에게 퇴장 알림
+        catch (Exception ex) { LogCloseError("접속 종료 처리", ex); }
+    }
+
+    private void LogCloseError(string step, Exception ex)
+    {
+        try { _handler.Log.Error($"[{Id}] 연결 정리 중 오류({step}): {ex.GetType().Name}: {ex.Message}"); }
+        catch { /* 로그조차 실패하면 할 수 있는 것이 없다 */ }
     }
 
     /// <summary>로그 출력용 "#3(홍길동 대리(A0001), 10.0.0.5:51234)".</summary>

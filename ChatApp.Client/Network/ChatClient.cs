@@ -15,7 +15,7 @@ namespace ChatApp.Client.Network;
 // - 스레드:
 //   · ConnectAsync, Disconnect → UI 스레드에서 부른다.
 //   · ReceiveLoop, PacketReceived/Disconnected 이벤트 → "수신 스레드"에서 실행된다(화면을 직접 바꾸면 안 됨!).
-//   · Send → UI 스레드(채팅 전송)와 파일 올리기 작업 스레드가 동시에 부를 수 있다 → _sendLock으로 보호.
+//   · Send/SendBulk → 어느 스레드에서 불러도 큐에 넣고 바로 돌아온다. 실제 쓰기는 전용 "Send" 스레드 하나만 한다.
 // - 연결: LoginForm(로그인/회원가입 응답 받기) → MainForm(이후 모든 패킷 처리).
 //         패킷 형식·읽기/쓰기는 Common의 Packet, NetworkHelper를 서버와 똑같이 쓴다.
 // [왜] 화면(Form)과 통신을 분리했다: 통신 코드가 WinForms를 모르므로 콘솔이나 테스트에서도 그대로 쓸 수 있고,
@@ -29,7 +29,7 @@ namespace ChatApp.Client.Network;
 /// - PacketReceived, Disconnected 이벤트는 "수신 스레드"에서 발생한다.
 ///   화면을 바꾸려면 Form에서 BeginInvoke로 UI 스레드에 넘겨야 한다(직접 건드리면 크로스 스레드 예외).
 /// - 이벤트 핸들러 안에서는 Invoke(동기) 대신 BeginInvoke(비동기)만 쓴다. (ReleaseHeld와의 교착 방지)
-/// - Send는 여러 스레드에서 불러도 안전하다(_sendLock).
+/// - Send/SendBulk는 여러 스레드에서 불러도 안전하다(보내기 큐 + 전용 송신 스레드).
 /// </summary>
 // [개념] IDisposable: "다 쓰면 Dispose()로 정리해야 하는 자원(소켓, 파일 등)을 가진 클래스"라는 표시.
 //   using var client = new ChatClient(); 처럼 쓰면 범위를 벗어날 때 Dispose()가 자동으로 불린다.
@@ -44,10 +44,25 @@ public sealed class ChatClient : IDisposable
     private Stream? _stream;
     private Thread? _receiveThread;
 
-    // [개념] lock 객체: lock(_sendLock) { ... } 블록에는 한 번에 한 스레드만 들어갈 수 있다(상호 배제).
-    //   [주의] 두 스레드가 동시에 같은 소켓에 쓰면 패킷 A의 앞부분과 패킷 B가 섞여 서버가 해석하지 못한다.
-    //   예) UI 스레드가 채팅을 보내는 도중 파일 올리기 스레드가 조각을 보내는 경우 → lock으로 한 번에 하나씩만 쓰게 한다.
-    private readonly object _sendLock = new();
+    // ── 보내기 큐 + 전용 송신 스레드 ──
+    // [왜] 예전에는 Send를 부른 스레드가 lock을 잡고 소켓에 직접 썼다. 그러면 큰 파일을 올리는 동안(조각 수천 개)
+    //      UI 스레드의 채팅 한 줄이 그 lock을 기다리느라 창이 멈칫하고, 네트워크가 막히면 UI 스레드까지 멈췄다.
+    //      이제 Send는 큐에 넣고 바로 돌아오며, 실제 쓰기는 "Send" 스레드 하나만 한다(쓰는 스레드가 하나라 섞일 일도 없다).
+    // [개념] 두 줄 큐: 일반(채팅·명령)이 항상 먼저, 대량(파일 조각)은 일반 큐가 비었을 때만 → 파일을 올리는 중에도 채팅이 바로 나간다.
+    // [개념] Monitor.Wait/PulseAll: lock을 잠깐 내려놓고 "누가 깨워 줄 때까지" 잠든다. 큐에 넣는 쪽이 PulseAll로 깨운다.
+    private readonly object _queueLock = new();
+    private readonly Queue<Packet> _normalQueue = new();
+    private readonly Queue<Packet> _bulkQueue = new();
+    /// <summary>대량 큐가 이만큼 차면 SendBulk가 기다린다(파일 조각을 메모리에 무한정 쌓지 않는다 = 배압).</summary>
+    private const int BulkQueueCapacity = 16;
+    /// <summary>일반 큐가 이만큼 쌓이면 네트워크가 막힌 것으로 보고 끊는다(메모리 보호).</summary>
+    private const int NormalQueueLimit = 10_000;
+    /// <summary>소켓 쓰기가 이 시간 넘게 막히면 끊김으로 본다.</summary>
+    private const int SendTimeoutMs = 30_000;
+    private Thread? _sendThread;
+    // [개념] 연결 세대 번호: 재접속하면 1 늘어난다. 이전 연결의 송신 스레드는 자기 세대가 아니면 스스로 끝난다.
+    private int _generation;
+    private readonly ManualResetEventSlim _logoutSent = new(false);
 
     // [개념] Interlocked / Volatile: 여러 스레드가 함께 보는 int 값을 안전하게 읽고 바꾸는 도구.
     //   _closed를 0→1로 바꾸는 일을 Interlocked.Exchange로 하면, 두 스레드가 동시에 Close를 불러도 정확히 한 번만 닫힌다.
@@ -99,6 +114,7 @@ public sealed class ChatClient : IDisposable
     ///        더 안전하게 하려면 로그인 때 서버가 "재접속 토큰"을 발급하는 방식으로 바꿀 수 있다(서버 재시작에는 약함).
     /// </summary>
     public LoginRequest? LastLogin { get; set; }
+    public TokenLoginRequest? LastTokenLogin { get; set; }
 
     /// <summary>서버가 ForceLogout을 보내 끊은 경우 true (다른 곳에서 로그인). 이때는 자동 재접속을 하면 안 된다.</summary>
     public bool KickedOut { get; private set; }
@@ -132,6 +148,8 @@ public sealed class ChatClient : IDisposable
         //   Nagle은 작은 데이터를 모아서 한 번에 보내려고 잠깐(수십 ms) 기다리는데, 채팅처럼 짧은 메시지를
         //   바로바로 보내야 하는 프로그램에서는 그 지연이 체감되므로 끈다.
         var tcp = new TcpClient { NoDelay = true };
+        // [개념] SendTimeout: 상대가 받지 않아 보내기 버퍼가 꽉 차면 Write가 영원히 멈출 수 있다. 시간을 넘기면 예외로 깨운다.
+        tcp.Client.SendTimeout = SendTimeoutMs;
 
         // [개념] CancellationTokenSource(timeoutMs): 지정한 시간이 지나면 자동으로 "취소" 신호를 보낸다.
         //   ConnectAsync에 그 토큰을 넘기면, 서버가 응답하지 않을 때 윈도우 기본값(약 20초)보다 훨씬 빨리 포기할 수 있다.
@@ -177,6 +195,15 @@ public sealed class ChatClient : IDisposable
             }
         }
 
+        int generation;
+        lock (_queueLock)
+        {
+            _normalQueue.Clear();
+            _bulkQueue.Clear();
+            generation = ++_generation;
+        }
+        _logoutSent.Reset();
+
         _tcp = tcp;
         _stream = stream;
         Host = host;
@@ -198,8 +225,14 @@ public sealed class ChatClient : IDisposable
         //   - 그래서 읽기만 하는 스레드를 따로 만든다. 이 스레드는 프로그램이 끝날 때까지 서버 메시지를 기다린다.
         //   - IsBackground = true: 메인(UI) 스레드가 끝나면 이 스레드도 같이 종료된다(프로그램이 안 꺼지는 문제 방지).
         //   - Name: 디버거의 "스레드" 창에서 어떤 스레드인지 알아보기 쉽게 이름을 붙인다.
-        _receiveThread = new Thread(ReceiveLoop) { IsBackground = true, Name = "Receive" };
+        // [왜] 스트림과 세대 번호를 넘겨 둔다: 이전 연결의 수신 스레드가 늦게 깨어나도 새 연결을 읽거나 닫지 않게.
+        Stream receiveStream = stream;
+        _receiveThread = new Thread(() => ReceiveLoop(receiveStream, generation)) { IsBackground = true, Name = "Receive" };
         _receiveThread.Start();
+
+        Stream sendStream = stream;
+        _sendThread = new Thread(() => SendLoop(sendStream, generation)) { IsBackground = true, Name = "Send" };
+        _sendThread.Start();
 
         // 하트비트 스레드: 일정 간격으로 Ping을 보내고, 서버가 오래 조용하면 끊김으로 처리한다.
         // [왜] 로그인 화면에 오래 머물러 있어도 서버가 연결을 끊지 않도록 "접속 직후"부터 돌린다.
@@ -234,14 +267,14 @@ public sealed class ChatClient : IDisposable
 
     /// <summary>수신 스레드 본체: 연결이 끊길 때까지 패킷을 읽어 Dispatch로 넘긴다.</summary>
     // [스레드] 수신 스레드에서만 실행된다.
-    private void ReceiveLoop()
+    private void ReceiveLoop(Stream stream, int generation)
     {
         string reason = "서버와 연결이 끊어졌습니다.";
         try
         {
             while (true)
             {
-                Packet? packet = NetworkHelper.ReadPacket(_stream!);
+                Packet? packet = NetworkHelper.ReadPacket(stream);
                 if (packet is null) break; // 서버가 정상 종료
 
                 // 무엇이든 받았으면 서버가 살아 있다 (하트비트 스레드가 이 시각을 본다)
@@ -271,7 +304,7 @@ public sealed class ChatClient : IDisposable
         finally
         {
             // [개념] finally: 정상 종료든 예외든 반드시 실행된다. 연결 정리를 빠뜨리지 않기 위해 여기에 둔다.
-            Close(reason);
+            if (generation == Volatile.Read(ref _generation)) Close(reason); // 이미 새 연결이면 건드리지 않는다
         }
     }
 
@@ -301,7 +334,12 @@ public sealed class ChatClient : IDisposable
 
         // [왜] 이벤트 호출은 lock 밖에서 한다. lock 안에서 남의 코드(구독자)를 부르면,
         //   그 코드가 오래 걸리거나 다른 lock을 기다릴 때 교착 상태가 생기기 쉽다.
-        PacketReceived?.Invoke(packet);
+        // [주의] 구독자에서 예외가 나면 수신 스레드가 죽고 프로그램 전체가 꺼진다. 패킷 하나만 버리고 계속 받는다.
+        try { PacketReceived?.Invoke(packet); }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            System.Diagnostics.Debug.WriteLine($"패킷 처리 중 오류 ({packet.Type}): {ex}");
+        }
     }
 
     /// <summary>
@@ -316,42 +354,129 @@ public sealed class ChatClient : IDisposable
     {
         lock (_holdLock)
         {
-            foreach (Packet packet in _held)
-                PacketReceived?.Invoke(packet);
-            _held.Clear();
-            _holding = false;
+            try
+            {
+                foreach (Packet packet in _held)
+                {
+                    try { PacketReceived?.Invoke(packet); }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"보관 패킷 처리 중 오류 ({packet.Type}): {ex}");
+                    }
+                }
+            }
+            finally
+            {
+                // [주의] 무슨 일이 있어도 보관을 끝낸다. 안 그러면 이후 패킷이 영영 전달되지 않는다.
+                _held.Clear();
+                _holding = false;
+            }
         }
     }
 
-    /// <summary>패킷 전송. 연결이 끊겨 있으면 false.</summary>
-    // [스레드] 여러 스레드(UI, 파일 올리기 작업 스레드)가 동시에 불러도 안전하다.
+    /// <summary>
+    /// 패킷 전송(일반 큐). 큐에 넣고 바로 돌아온다. 연결이 끊겨 있으면 false.
+    /// [주의] true는 "보내기로 했다"는 뜻이지 서버가 받았다는 뜻이 아니다. 받았는지는 서버의 응답·방송으로 안다.
+    /// </summary>
+    // [스레드] 어느 스레드에서 불러도 안전하다.
     public bool Send(Packet packet)
     {
         if (!IsConnected) return false;
+        bool overflow;
+        lock (_queueLock)
+        {
+            overflow = _normalQueue.Count >= NormalQueueLimit;
+            if (!overflow)
+            {
+                _normalQueue.Enqueue(packet);
+                Monitor.PulseAll(_queueLock);
+            }
+        }
+        if (overflow) Close("네트워크가 너무 느려 보내지 못한 메시지가 쌓였습니다. 연결을 다시 맺습니다.");
+        return !overflow;
+    }
+
+    /// <summary>
+    /// 대량 전송(파일 조각). 대량 큐가 가득 차 있으면 자리가 날 때까지 기다린다(배압).
+    /// 연결이 끊기거나 cancel이 오면 false. [스레드] 파일 올리기 작업 스레드에서만 부른다(UI 스레드에서 부르면 창이 멈출 수 있다).
+    /// </summary>
+    public bool SendBulk(Packet packet, CancellationToken cancel = default)
+    {
+        lock (_queueLock)
+        {
+            while (_bulkQueue.Count >= BulkQueueCapacity)
+            {
+                if (!IsConnected || cancel.IsCancellationRequested) return false;
+                Monitor.Wait(_queueLock, 200); // 송신 스레드가 하나 꺼낼 때마다 깨워 준다 (200ms마다 취소도 확인)
+            }
+            if (!IsConnected || cancel.IsCancellationRequested) return false;
+            _bulkQueue.Enqueue(packet);
+            Monitor.PulseAll(_queueLock);
+        }
+        return true;
+    }
+
+    /// <summary>송신 스레드 본체: 큐에서 꺼내 소켓에 쓴다. 일반 큐가 항상 먼저.</summary>
+    // [스레드] "Send" 스레드에서만 실행된다. 이 스레드만 _stream에 쓰므로 쓰기용 lock이 필요 없다.
+    private void SendLoop(Stream stream, int generation)
+    {
         try
         {
-            lock (_sendLock)
+            while (true)
             {
-                NetworkHelper.WritePacket(_stream!, packet);
+                Packet packet;
+                lock (_queueLock)
+                {
+                    while (_normalQueue.Count == 0 && _bulkQueue.Count == 0)
+                    {
+                        if (generation != _generation || Volatile.Read(ref _closed) == 1) return;
+                        Monitor.Wait(_queueLock, 1000);
+                    }
+                    if (generation != _generation) return;
+                    packet = _normalQueue.Count > 0 ? _normalQueue.Dequeue() : _bulkQueue.Dequeue();
+                    Monitor.PulseAll(_queueLock); // SendBulk에서 자리를 기다리는 스레드를 깨운다
+                }
+                try
+                {
+                    NetworkHelper.WritePacket(stream, packet);
+                }
+                catch (Exception ex) when (ex is InvalidDataException or JsonException or NotSupportedException)
+                {
+                    // 너무 크거나 직렬화할 수 없는 패킷 하나 → 그 패킷만 버리고 계속 보낸다
+                    // [주의] 여기서 예외가 새면 송신 스레드가 죽고 프로그램 전체가 꺼진다.
+                    System.Diagnostics.Debug.WriteLine($"보낼 수 없는 패킷을 버림 ({packet.Type}): {ex.Message}");
+                    continue;
+                }
+                if (packet.Type == PacketType.Logout)
+                {
+                    _logoutSent.Set();
+                    return; // 로그아웃 뒤에는 아무것도 보내지 않는다
+                }
             }
-            return true;
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
         {
-            // [왜] Close는 lock 밖에서 부른다. Close가 Disconnected 이벤트를 발생시키는데,
-            //   그 구독자가 다시 Send를 부르면 lock 안에서 같은 lock을 기다리는 꼴이 될 수 있어서다.
-            Close("메시지를 보내는 중 연결이 끊어졌습니다.");
-            return false;
+            if (generation == Volatile.Read(ref _generation))
+                Close("메시지를 보내는 중 연결이 끊어졌습니다.");
         }
     }
 
-    /// <summary>사용자가 직접 종료(로그아웃). Disconnected 이벤트는 발생하지 않는다.</summary>
+    /// <summary>
+    /// 사용자가 직접 종료(로그아웃). Disconnected 이벤트는 발생하지 않는다.
+    /// 아직 안 나간 채팅은 보내고, 마지막으로 Logout을 보낸 뒤(최대 1.5초 기다림) 닫는다. 보내던 파일 조각은 버린다.
+    /// </summary>
     // [왜] 내가 닫은 것까지 "연결이 끊어졌습니다" 경고 창을 띄우면 이상하므로 _userClosing으로 구분한다.
     public void Disconnect()
     {
         if (!IsConnected) return;
         _userClosing = true;
-        Send(Packet.Create(PacketType.Logout)); // 서버가 바로 접속 종료 처리를 하도록 알림
+        lock (_queueLock)
+        {
+            _bulkQueue.Clear();
+            _normalQueue.Enqueue(Packet.Create(PacketType.Logout)); // 서버가 바로 접속 종료 처리를 하도록 알림 (맨 마지막 패킷)
+            Monitor.PulseAll(_queueLock);
+        }
+        _logoutSent.Wait(1500);
         Close("로그아웃");
     }
 
@@ -364,13 +489,22 @@ public sealed class ChatClient : IDisposable
         if (Interlocked.Exchange(ref _closed, 1) == 1) return;
 
         _heartbeatStop?.Cancel(); // 하트비트 스레드를 깨워서 끝낸다
+        lock (_queueLock)
+        {
+            _bulkQueue.Clear();
+            Monitor.PulseAll(_queueLock); // 송신 스레드와 SendBulk에서 기다리는 스레드를 깨운다
+        }
 
         // 스트림을 닫으면 수신 스레드의 ReadPacket이 예외로 깨어나 ReceiveLoop가 끝난다
-        _stream?.Close();
+        try { _stream?.Close(); } catch (Exception ex) when (ex is IOException or ObjectDisposedException) { }
         _tcp?.Close();
 
         if (!_userClosing)
-            Disconnected?.Invoke(reason);
+        {
+            // [주의] 구독자(화면) 코드에서 예외가 나도 이 스레드(수신/송신/하트비트)가 죽어 프로그램이 꺼지지 않게 한다.
+            try { Disconnected?.Invoke(reason); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Disconnected 처리 중 오류: {ex}"); }
+        }
     }
 
     public void Dispose() => Disconnect();

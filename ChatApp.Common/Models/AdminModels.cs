@@ -111,6 +111,20 @@ public sealed class AuditEntry
     public string? ClientIp { get; set; }
 }
 
+/// <summary>관리자 대시보드에 표시할 현재 서비스 지표.</summary>
+public sealed class AdminStats
+{
+    public int ActiveUsers { get; set; }
+    public int PendingUsers { get; set; }
+    public int SuspendedUsers { get; set; }
+    public int OnlineUsers { get; set; }
+    public int OpenRooms { get; set; }
+    public long Messages { get; set; }
+    public long Files { get; set; }
+    public long FileBytes { get; set; }
+    public DateTime CapturedAtUtc { get; set; }
+}
+
 /// <summary>감사 로그에 남기는 동작 이름 (DB audit_logs.action, 최대 30자).</summary>
 // [왜] 문자열을 곳곳에 직접 쓰면 오타("LOGIN_FAIL" / "LOGIN_FAILED")가 생겨 검색이 안 된다. 한곳에 상수로 모은다.
 public static class AuditActions
@@ -123,6 +137,10 @@ public static class AuditActions
     public const string FileUpload = "FILE_UPLOAD";
     public const string FileDownload = "FILE_DOWNLOAD";
     public const string RoomCreate = "ROOM_CREATE";
+    public const string MessageDelete = "MESSAGE_DELETE"; // 관리자가 남의 메시지를 지움
+    public const string MessageEdit = "MESSAGE_EDIT";
+    public const string RoomDelete = "ROOM_DELETE";       // 방장·관리자가 방을 삭제함
+    public const string RoomOwner = "ROOM_OWNER";         // 방장이 바뀜 (위임 또는 방장이 나가서 자동)
     public const string Notice = "NOTICE";
     public const string Denied = "ADMIN_DENIED";      // 관리자가 아닌데 관리 기능을 요청함
     public const string ServerStart = "SERVER_START";
@@ -147,6 +165,10 @@ public static class AuditActions
         FileUpload => "파일 보냄",
         FileDownload => "파일 받음",
         RoomCreate => "방 만듦",
+        MessageDelete => "메시지 삭제(관리자)",
+        MessageEdit => "메시지 수정",
+        RoomDelete => "방 삭제",
+        RoomOwner => "방장 변경",
         Notice => "공지",
         Denied => "권한 없는 관리 시도",
         ServerStart => "서버 시작",
@@ -166,7 +188,7 @@ public static class AuditActions
     /// <summary>화면 필터용 목록.</summary>
     public static readonly string[] All =
     [
-        LoginOk, LoginFail, Logout, Register, PasswordChange, FileUpload, FileDownload, RoomCreate, Notice, Denied, ServerStart,
+        LoginOk, LoginFail, Logout, Register, PasswordChange, FileUpload, FileDownload, RoomCreate, RoomDelete, RoomOwner, MessageDelete, MessageEdit, Notice, Denied, ServerStart,
         "APPROVE", "REJECT", "SUSPEND", "RESIGN", "ACTIVATE", "UNLOCK", "RESET_PASSWORD", "KICK", "GRANT_ADMIN", "REVOKE_ADMIN",
     ];
 }

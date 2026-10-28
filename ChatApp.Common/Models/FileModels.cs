@@ -52,11 +52,27 @@ public sealed class SharedFile
     public string SenderNo { get; set; } = "";
     public string SenderName { get; set; } = "";
     public byte[]? Thumbnail { get; set; }
-    public DateTime SentAt { get; set; } = DateTime.Now;
+    public DateTime SentAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>화면 표시용 크기 문자열 (예: "160.6 MB").</summary>
     // [주의] get 전용 속성도 JSON에 포함되어 전송된다(받는 쪽에서는 set이 없어 무시됨). 크기가 작아 그대로 둔다.
     public string SizeText => FileRules.FormatSize(Size);
+}
+
+/// <summary>방 파일 보관함의 과거 페이지 요청. Before/BeforeFileId는 직전 페이지에서 가장 오래된 항목.</summary>
+public sealed class RoomFilesRequest
+{
+    public int RoomId { get; set; }
+    public DateTime? Before { get; set; }
+    public string? BeforeFileId { get; set; }
+}
+
+/// <summary>방 파일 보관함의 메타데이터 페이지. 원본과 미리보기 바이트는 포함하지 않는다.</summary>
+public sealed class RoomFilesBatch
+{
+    public int RoomId { get; set; }
+    public List<SharedFile> Files { get; set; } = [];
+    public bool HasMore { get; set; }
 }
 
 /// <summary>파일 전송 규칙. 서버와 클라이언트가 같은 값을 쓴다.</summary>
@@ -88,7 +104,12 @@ public static class FileRules
     //   "열기" 전에 경고해서 실수로 실행하는 것을 막는다.
     private static readonly HashSet<string> ExecutableExtensions =
         [".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".ps1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
-         ".hta", ".lnk", ".reg", ".cpl", ".jar", ".dll", ".pif", ".appx", ".msix"];
+         ".hta", ".lnk", ".reg", ".cpl", ".jar", ".dll", ".pif", ".appx", ".msix",
+         // 바로 가기·디스크 이미지(안의 파일은 경고 표시가 사라짐)·도움말·관리 콘솔 등 실행으로 이어지는 형식
+         ".url", ".iso", ".img", ".vhd", ".vhdx", ".chm", ".msc", ".application", ".xll", ".one", ".psm1", ".sct",
+         ".gadget", ".inf", ".scf", ".appref-ms", ".settingcontent-ms",
+         // 매크로가 들어 있을 수 있는 Office 문서
+         ".docm", ".xlsm", ".pptm", ".xlam", ".dotm", ".xltm", ".potm", ".ppam", ".sldm"];
 
     /// <summary>파일 이름의 확장자로 사진/동영상/일반 파일을 구분한다.</summary>
     public static FileKind GetKind(string fileName)

@@ -48,3 +48,10 @@ uploads/
 # 서버 TLS 인증서 (개인 키 포함 - 절대 올리지 않음)
 certs/
 *.pfx
+
+# DB 백업 파일 (대화 내용 포함)
+db/backup/
+db/backup.cnf
+
+# 배포 결과물 (publish.bat)
+publish/

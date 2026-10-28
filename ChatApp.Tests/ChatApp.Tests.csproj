@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    단위·통합 테스트 (xUnit). 실행: dotnet test  (또는 Visual Studio 메뉴 → 테스트 → 모든 테스트 실행)
+    DB(MariaDB)가 없어도 돌아가는 테스트만 모았다. 그래야 GitHub Actions(CI)에서도 매번 자동으로 돈다.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ChatApp.Common\ChatApp.Common.csproj" />
+    <ProjectReference Include="..\ChatApp.Server\ChatApp.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 모든 테스트 파일에서 using Xunit; 을 따로 쓰지 않아도 되게 -->
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

@@ -7,6 +7,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <!-- 클라이언트 버전: 새로 배포할 때마다 올리고, 서버 appsettings.json의 ClientLatestVersion도 같은 값으로 맞춘다 -->
+    <Version>1.3.0</Version>
+    <Product>사내톡</Product>
+    <AssemblyTitle>사내톡</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>

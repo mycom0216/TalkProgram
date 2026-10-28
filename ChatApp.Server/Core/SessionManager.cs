@@ -96,6 +96,9 @@ public sealed class SessionManager
         }
     }
 
+    /// <summary>로그인을 마친 세션들의 스냅샷 (임시 비밀번호 변경 대기 중인 세션 제외).</summary>
+    public ClientSession[] GetLoggedInSessions() => _byEmployeeNo.Values.Where(s => !s.MustChangePassword).ToArray();
+
     /// <summary>접속한 모든 세션(로그인 전 포함)의 스냅샷. 하트비트 감시 스레드가 무응답 연결을 찾을 때 쓴다.</summary>
     public ClientSession[] GetAllSessions() => _all.Values.ToArray();
 

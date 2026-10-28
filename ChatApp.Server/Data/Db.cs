@@ -30,6 +30,11 @@ public sealed class Db(string connectionString)
     {
         var connection = new MySqlConnection(connectionString);
         connection.Open();
+        using (DbCommand command = connection.CreateCommand())
+        {
+            command.CommandText = "SET time_zone = '+00:00'";
+            command.ExecuteNonQuery();
+        }
         return connection;
     }
 
@@ -39,6 +44,28 @@ public sealed class Db(string connectionString)
     public void TestConnection()
     {
         using DbConnection connection = Open();
+    }
+
+    /// <summary>이 프로그램이 필요로 하는 DB 스키마 버전 (db/migrate_00N 스크립트 번호).</summary>
+    public const int RequiredSchemaVersion = 10;
+
+    public static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    public static DateTime? AsUtc(DateTime? value) => value is DateTime dt ? AsUtc(dt) : null;
+
+    /// <summary>DB에 적용된 마이그레이션 번호 (schema_version 표). 표가 없으면(migrate_005 전) 0.</summary>
+    public int SchemaVersion()
+    {
+        try
+        {
+            using DbConnection conn = Open();
+            using DbCommand cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT COALESCE(MAX(version), 0) FROM schema_version";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        catch (DbException ex) when (ex.SqlState == "42S02") // 표 없음
+        {
+            return 0;
+        }
     }
 }
 

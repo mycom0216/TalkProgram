@@ -1,4 +1,6 @@
 using System.Data.Common;
+using System.Security.Cryptography;
+using System.Text;
 using ChatApp.Common.Models;
 
 namespace ChatApp.Server.Data;
@@ -31,6 +33,38 @@ public sealed record UserRecord(
 /// </summary>
 public sealed class UserRepository(Db db)
 {
+    public void IssueLoginToken(string employeeNo, string deviceId, string token, DateTime expiresAt)
+    {
+        string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "INSERT INTO login_tokens (employee_no, device_id, token_hash, expires_at) VALUES (@no, @device, @hash, @expires) ON DUPLICATE KEY UPDATE token_hash = VALUES(token_hash), expires_at = VALUES(expires_at), created_at = UTC_TIMESTAMP()";
+        cmd.AddParam("@no", employeeNo);
+        cmd.AddParam("@device", deviceId);
+        cmd.AddParam("@hash", hash);
+        cmd.AddParam("@expires", expiresAt);
+        cmd.ExecuteNonQuery();
+    }
+
+    public bool ValidateLoginToken(string employeeNo, string deviceId, string token)
+    {
+        string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        // Tokens are only a convenience for local accounts. LDAP accounts must
+        // re-authenticate against the directory so a disabled AD account cannot
+        // keep using a 30-day bearer token.
+        cmd.CommandText = """
+            SELECT t.token_hash = @hash AND t.expires_at > UTC_TIMESTAMP()
+            FROM login_tokens t
+            JOIN users u ON u.employee_no = t.employee_no
+            WHERE t.employee_no = @no AND t.device_id = @device AND u.status = 'ACTIVE' AND u.auth_source = 'LOCAL'
+            """;
+        cmd.AddParam("@no", employeeNo);
+        cmd.AddParam("@device", deviceId);
+        cmd.AddParam("@hash", hash);
+        return Convert.ToInt32(cmd.ExecuteScalar() ?? 0) == 1;
+    }
     /// <summary>사원번호로 회원 한 명 찾기. 없으면 null.</summary>
     // [왜] 잠금 남은 시간(분)을 SQL에서 계산한다(NOW()는 DB 시계). 서버와 DB 시계가 달라도 잠금 판단이 일관된다.
     public UserRecord? FindByEmployeeNo(string employeeNo)
@@ -40,7 +74,7 @@ public sealed class UserRepository(Db db)
         cmd.CommandText = """
             SELECT employee_no, email, name, department, position, role, status, auth_source,
                    password_hash, salt,
-                   IF(locked_until > NOW(), CEIL(TIMESTAMPDIFF(SECOND, NOW(), locked_until) / 60), 0) AS lock_minutes_left
+                   IF(locked_until > UTC_TIMESTAMP(), CEIL(TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), locked_until) / 60), 0) AS lock_minutes_left
             FROM users
             WHERE employee_no = @no
             """;
@@ -115,7 +149,7 @@ public sealed class UserRepository(Db db)
         using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = """
             UPDATE users
-            SET locked_until       = IF(failed_login_count + 1 >= @max, NOW() + INTERVAL @min MINUTE, locked_until),
+            SET locked_until       = IF(failed_login_count + 1 >= @max, UTC_TIMESTAMP() + INTERVAL @min MINUTE, locked_until),
                 failed_login_count = IF(failed_login_count + 1 >= @max, 0, failed_login_count + 1)
             WHERE employee_no = @no
             """;
@@ -132,7 +166,7 @@ public sealed class UserRepository(Db db)
         using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = """
             UPDATE users
-            SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW()
+            SET failed_login_count = 0, locked_until = NULL, last_login_at = UTC_TIMESTAMP()
             WHERE employee_no = @no
             """;
         cmd.AddParam("@no", employeeNo);
@@ -218,7 +252,15 @@ public sealed class UserRepository(Db db)
         cmd.AddParam("@salt", salt);
         cmd.AddParam("@must", mustChange ? 1 : 0);
         cmd.AddParam("@no", employeeNo);
-        return cmd.ExecuteNonQuery() == 1;
+        bool updated = cmd.ExecuteNonQuery() == 1;
+        if (updated)
+        {
+            using DbCommand revoke = conn.CreateCommand();
+            revoke.CommandText = "DELETE FROM login_tokens WHERE employee_no = @no";
+            revoke.AddParam("@no", employeeNo);
+            revoke.ExecuteNonQuery();
+        }
+        return updated;
     }
 
     // ───────── 관리자 기능 ─────────
@@ -232,7 +274,7 @@ public sealed class UserRepository(Db db)
         //      SQL Injection 걱정이 없고, 필터가 있든 없든 같은 쿼리 하나로 처리된다.
         cmd.CommandText = """
             SELECT employee_no, email, name, department, position, role, status,
-                   IF(locked_until > NOW(), CEIL(TIMESTAMPDIFF(SECOND, NOW(), locked_until) / 60), 0),
+                   IF(locked_until > UTC_TIMESTAMP(), CEIL(TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), locked_until) / 60), 0),
                    created_at, last_login_at
             FROM users
             WHERE @status IS NULL OR status = @status
@@ -254,8 +296,8 @@ public sealed class UserRepository(Db db)
                 Role = r.GetString(5),
                 Status = r.GetString(6),
                 LockMinutesLeft = Convert.ToInt32(r.GetValue(7)),
-                CreatedAt = r.GetDateTime(8),
-                LastLoginAt = r.IsDBNull(9) ? null : r.GetDateTime(9),
+                CreatedAt = Db.AsUtc(r.GetDateTime(8)),
+                LastLoginAt = r.IsDBNull(9) ? null : Db.AsUtc(r.GetDateTime(9)),
             });
         }
         return list;
@@ -278,7 +320,15 @@ public sealed class UserRepository(Db db)
         cmd.AddParam("@status", status);
         cmd.AddParam("@no", employeeNo);
         cmd.AddParam("@from", fromStatus);
-        return cmd.ExecuteNonQuery() == 1;
+        bool changed = cmd.ExecuteNonQuery() == 1;
+        if (changed)
+        {
+            using DbCommand revoke = conn.CreateCommand();
+            revoke.CommandText = "DELETE FROM login_tokens WHERE employee_no = @no";
+            revoke.AddParam("@no", employeeNo);
+            revoke.ExecuteNonQuery();
+        }
+        return changed;
     }
 
     /// <summary>승인 대기 계정 삭제 (가입 거절). 대화·파일 기록이 없는 PENDING 계정만 지울 수 있다.</summary>
@@ -327,6 +377,94 @@ public sealed class UserRepository(Db db)
         using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM users WHERE status = 'PENDING'";
         return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    // ───────── 회사 사람 목록 (초대·조직도) ─────────
+
+    /// <summary>사용 중(ACTIVE)인 모든 사람. 부서 → 이름 순. 비밀번호 같은 민감한 칸은 읽지 않는다.</summary>
+    public List<UserInfo> ListActiveUsers()
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT employee_no, name, department, position, role FROM users
+            WHERE status = 'ACTIVE' ORDER BY department, name LIMIT 10000
+            """;
+        var list = new List<UserInfo>();
+        using DbDataReader r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4) });
+        return list;
+    }
+
+    /// <summary>주어진 사원번호 중 사용 중(ACTIVE)인 사람의 "이름 직급". 없거나 정지된 사람은 빠진다.</summary>
+    public Dictionary<string, string> GetActiveDisplayNames(IReadOnlyCollection<string> employeeNos)
+    {
+        var result = new Dictionary<string, string>();
+        if (employeeNos.Count == 0) return result;
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        var names = new List<string>();
+        int i = 0;
+        foreach (string no in employeeNos)
+        {
+            string name = $"@n{i++}";
+            names.Add(name);
+            cmd.AddParam(name, no);
+        }
+        cmd.CommandText = $"SELECT employee_no, CONCAT(name, ' ', position) FROM users WHERE status = 'ACTIVE' AND employee_no IN ({string.Join(",", names)})";
+        using DbDataReader r = cmd.ExecuteReader();
+        while (r.Read()) result[r.GetString(0)] = r.GetString(1);
+        return result;
+    }
+
+    /// <summary>사용 중(ACTIVE)인 사람 한 명 (접속하지 않은 사람에게 1:1 메시지를 보낼 때 이름 확인용). 없으면 null.</summary>
+    public UserInfo? FindActiveUser(string employeeNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT employee_no, name, department, position, role FROM users WHERE employee_no = @no AND status = 'ACTIVE'";
+        cmd.AddParam("@no", employeeNo);
+        using DbDataReader r = cmd.ExecuteReader();
+        return r.Read()
+            ? new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4) }
+            : null;
+    }
+
+    /// <summary>지금 사용 중(ACTIVE) 계정인지. 로그인 처리 도중 정지된 경우를 잡으려고 로그인 마지막에 한 번 더 확인한다.</summary>
+    public bool IsActive(string employeeNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT status FROM users WHERE employee_no = @no";
+        cmd.AddParam("@no", employeeNo);
+        return cmd.ExecuteScalar() as string == "ACTIVE";
+    }
+
+    /// <summary>LDAP가 인증한 기존 계정의 표시 프로필만 갱신한다. 계정 상태·역할·이메일은 여기서 변경하지 않는다.</summary>
+    public bool UpdateLdapProfile(string employeeNo, string? name, string? department, string? position)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE users SET
+              name = COALESCE(NULLIF(@name, ''), name),
+              department = COALESCE(NULLIF(@department, ''), department),
+              position = COALESCE(NULLIF(@position, ''), position)
+            WHERE employee_no = @no AND auth_source = 'LDAP' AND status = 'ACTIVE'
+            """;
+        cmd.AddParam("@no", employeeNo);
+        cmd.AddParam("@name", BoundProfile(name, 30));
+        cmd.AddParam("@department", BoundProfile(department, 30));
+        cmd.AddParam("@position", BoundProfile(position, 30));
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
+    private static string? BoundProfile(string? value, int maxLength)
+    {
+        string cleaned = new((value ?? "").Where(c => !char.IsControl(c)).ToArray());
+        cleaned = cleaned.Trim();
+        return cleaned.Length == 0 ? null : cleaned[..Math.Min(cleaned.Length, maxLength)];
     }
 
     /// <summary>없는 칸(column)을 읽거나 쓰려 할 때 MariaDB가 주는 SQLSTATE.</summary>

@@ -53,6 +53,7 @@ await Parallel.ForEachAsync(Enumerable.Range(1, userCount), new ParallelOptions 
     NetworkHelper.WritePacket(s, Packet.Create(PacketType.RegisterReq).WithData(new RegisterRequest
     {
         EmployeeNo = No(i), Email = $"{No(i).ToLower()}@loadtest.example", Name = $"부하{i}", Department = "부하테스트", Position = "봇", Password = Password,
+        ProtocolVersion = ProtocolInfo.Version,
     }));
     while (NetworkHelper.ReadPacket(s) is Packet p)
     {
@@ -156,7 +157,7 @@ sealed class VirtualUser(int index, string employeeNo)
             await _tcp.ConnectAsync(host, port);
             _stream = await Net.OpenAsync(_tcp, host, useTls);
             new Thread(ReceiveLoop) { IsBackground = true, Name = $"LT-{index}" }.Start();
-            Send(Packet.Create(PacketType.LoginReq).WithData(new LoginRequest { EmployeeNo = employeeNo, Password = password }));
+            Send(Packet.Create(PacketType.LoginReq).WithData(new LoginRequest { EmployeeNo = employeeNo, Password = password, ProtocolVersion = ProtocolInfo.Version }));
             LoggedIn = await _login.Task.WaitAsync(TimeSpan.FromSeconds(60));
             if (LoggedIn) _ = HeartbeatLoopAsync(); // 실제 클라이언트처럼 15초마다 Ping (안 보내면 서버가 45초 뒤 끊는다)
         }

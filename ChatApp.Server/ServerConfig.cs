@@ -42,9 +42,9 @@ public sealed class ServerConfig
 
     /// <summary>
     /// true면 가입 즉시 사용 가능(ACTIVE), false면 관리자 승인 대기(PENDING).
-    /// 관리자 기능(6단계)을 만들기 전까지는 true로 둔다.
+    /// [왜] 기본값 false: 사내 메신저는 아무나 가입해서 바로 회사 대화를 보면 안 된다(관리자 창에서 승인).
     /// </summary>
-    public bool AutoApprove { get; set; } = true;
+    public bool AutoApprove { get; set; }
 
     /// <summary>비밀번호 연속 실패 허용 횟수 (SC-02).</summary>
     public int MaxLoginAttempts { get; set; } = 5;
@@ -68,9 +68,50 @@ public sealed class ServerConfig
 
     public string UploadRoot => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, UploadFolder));
 
+    // ───────── 서버 보호 (DoS 방어) ─────────
+
+    /// <summary>동시에 연결할 수 있는 최대 수 (로그인 전 포함). 넘으면 새 연결을 바로 끊는다.</summary>
+    // [왜] 접속마다 스레드 2개가 생기므로, 제한이 없으면 연결만 수천 개 열어도 서버 스레드·메모리가 바닥난다.
+    public int MaxConnections { get; set; } = 2000;
+
+    /// <summary>IP 하나에서 동시에 열 수 있는 최대 연결 수. 127.0.0.1(같은 PC, 부하 테스트)은 제외.</summary>
+    public int MaxConnectionsPerIp { get; set; } = 50;
+
+    /// <summary>접속 후 이 시간(초) 안에 로그인하지 않으면 끊는다. 회원가입 화면을 채우는 시간을 고려해 넉넉히 둔다.</summary>
+    public int LoginTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>한 사람에게 보내려고 쌓아 둘 수 있는 최대 데이터(MB). 넘으면 "받지 않는 클라이언트"로 보고 끊는다.</summary>
+    public int MaxSendQueueMB { get; set; } = 64;
+
+    /// <summary>소켓 쓰기 제한 시간(초). 상대가 전혀 받지 않으면 이 시간 뒤 끊는다(송신 스레드가 영원히 멈추지 않게).</summary>
+    public int SendTimeoutSeconds { get; set; } = 120;
+
+    /// <summary>false면 같은 PC(127.0.0.1)에서 오는 로그인·가입은 속도 제한을 하지 않는다(부하 테스트·개발용). 운영 서버도 보통 false로 둔다.</summary>
+    public bool RateLimitLoopback { get; set; }
+
+    // ───────── 보관 기간 (0 = 지우지 않음) ─────────
+
+    /// <summary>대화(메시지) 보관 일수. 지난 것은 하루 한 번 지운다. 회사 규정에 맞춰 정한다.</summary>
+    public int MessageRetentionDays { get; set; } = 365;
+
+    /// <summary>주고받은 파일 보관 일수. 지난 파일은 서버 디스크에서도 지운다.</summary>
+    public int FileRetentionDays { get; set; } = 180;
+
+    /// <summary>감사 로그 보관 일수. 보안 점검 대비로 대화보다 길게 둔다.</summary>
+    public int AuditRetentionDays { get; set; } = 730;
+
+    /// <summary>배포한 최신 클라이언트 버전(예: "1.3.0"). 이보다 낮은 클라이언트는 로그인 후 "새 버전" 안내를 본다.</summary>
+    public string ClientLatestVersion { get; set; } = "";
+
+    /// <summary>설치 파일 위치(예: \\fileserver\share\사내톡-설치.exe 또는 https://...). 안내를 누르면 연다.</summary>
+    public string ClientUpdateUrl { get; set; } = "";
+
     /// <summary>TLS(암호화 통신) 설정. appsettings.json에 "Tls" 항목이 없으면 기본값(켜짐)을 쓴다.</summary>
     // [왜] 기본값을 "켜짐"으로: 보안 기능은 깜빡하고 안 켜는 일이 많다. 끄려면 일부러 false를 적어야 하게 한다(secure by default).
     public TlsConfig Tls { get; set; } = new();
+
+    /// <summary>선택적 Active Directory/LDAP 인증 설정. LDAPS(SSL)는 항상 사용한다.</summary>
+    public LdapConfig Ldap { get; set; } = new();
 
     public static ServerConfig Load(string path)
     {
@@ -104,4 +145,19 @@ public sealed class TlsConfig
     public string CertificatePassword { get; set; } = "";
 
     public string CertificateFullPath => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, CertificatePath));
+}
+
+public sealed class LdapConfig
+{
+    public bool Enabled { get; set; }
+    public string Server { get; set; } = "";
+    public int Port { get; set; } = 636;
+    public string UserPrincipalNameSuffix { get; set; } = "";
+    public int TimeoutSeconds { get; set; } = 5;
+    /// <summary>선택. 설정하면 로그인 성공 후 허용된 프로필 필드만 동기화한다. 계정 자동 생성/권한 부여는 하지 않는다.</summary>
+    public string ProfileBaseDn { get; set; } = "";
+    public string EmployeeNumberAttribute { get; set; } = "sAMAccountName";
+    public string DisplayNameAttribute { get; set; } = "displayName";
+    public string DepartmentAttribute { get; set; } = "department";
+    public string PositionAttribute { get; set; } = "title";
 }

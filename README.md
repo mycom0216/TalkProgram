@@ -1,6 +1,9 @@
-# ChatApp — C# 멀티스레드 채팅 프로그램
+# ChatApp — C# 멀티스레드 채팅 프로그램 "사내톡"
 
-C# / .NET 10 TCP 소켓 기반 다중 채팅 프로그램. 서버는 클라이언트 1명당 수신 스레드 1개를 두어 동시 채팅을 처리한다.
+C# / .NET 10 TCP 소켓 기반 1:N 사내 메신저. 서버는 접속자마다 수신·송신 스레드를 따로 두어 동시 채팅을 처리한다.
+WinForms 클라이언트, MariaDB, TLS 암호화, 파일 전송(최대 3GB), 관리자 기능·감사 로그를 갖췄다.
+
+[![Build](https://github.com/mycom0216/ChatApp/actions/workflows/dotnet-desktop.yml/badge.svg)](https://github.com/mycom0216/ChatApp/actions/workflows/dotnet-desktop.yml)
 
 ## 구조
 
@@ -9,7 +12,11 @@ ChatApp.slnx
 ├─ ChatApp.Common/         공통 (패킷 정의, 직렬화, 송수신 도우미)
 ├─ ChatApp.Server/         서버 (Accept 스레드, 세션별 수신 스레드, 로그 스레드)
 ├─ ChatApp.Client/         WinForms 클라이언트 "사내톡" (로그인, 친구 목록 창, 1:1·채팅방 대화창)
-└─ ChatApp.ConsoleClient/  검증용 콘솔 클라이언트
+├─ ChatApp.ConsoleClient/  검증용 콘솔 클라이언트
+├─ ChatApp.LoadTest/       부하 테스트 도구 (가상 사용자 N명)
+├─ ChatApp.Tests/          단위·통합 테스트 (xUnit, DB 없이 실행)
+├─ db/                     DB 스키마와 마이그레이션 스크립트
+└─ docs/TESTING.md         테스트 결과서
 ```
 
 스레드 구성(서버):
@@ -38,9 +45,17 @@ ChatApp.slnx
 "C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_002_files.sql"
 "C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_003_status.sql"
 "C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_004_admin.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_005_rooms_messages.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_006_room_notices.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_007_message_edit.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_008_login_tokens.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_009_utc_timestamps.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_010_device_login_tokens.sql"
 ```
 
-   - 002 = 파일 전송, 003 = 상태 메시지, 004 = 관리자 기능. 이미 실행한 것을 다시 실행해도 문제없다(IF NOT EXISTS).
+   - 002 = 파일 전송, 003 = 상태 메시지, 004 = 관리자 기능, 005 = 영구·비공개 방, 답장·공감·삭제, 읽음 표시, 검색 인덱스, 006 = 방별 고정 공지, 007 = 메시지 수정 시각, 008 = 자동 로그인 토큰, 009 = 기존 DATETIME을 UTC로 변환, 010 = 기기별 자동 로그인 토큰.
+   - 서버는 시작할 때 DB 버전(schema_version)을 확인하고, 최신 버전 010까지 적용되지 않았으면 필요한 마이그레이션을 안내하고 시작하지 않는다. 009는 기본 설정으로는 아무것도 변환하지 않는다. 먼저 `preview_009_utc_timestamps.sql`을 실행해 기존 값과 알려진 실제 시각을 대조하고, 전체 백업 후 시간대 오프셋과 확인 문자열을 설정해야 적용된다.
+5. 백업: `db\backup.bat`을 작업 스케줄러에 매일 등록한다 (사용법은 파일 안 주석).
 
 ## TLS 암호화 (기본 켜짐)
 
@@ -51,6 +66,14 @@ ChatApp.slnx
   - `certs/`와 `*.pfx`는 개인 키가 들어 있어 `.gitignore`에 있다. 절대 올리지 않는다.
   - 평문으로 테스트하려면 `"Tls": { "Enabled": false }`로 둔다. 이 경우 서버가 경고를 출력한다.
 - **클라이언트**: 처음 접속하면 서버 인증서 지문을 보여 주고 신뢰할지 묻는다(TOFU, SSH의 known_hosts와 같은 방식). 신뢰한 지문은 `%LocalAppData%\ChatApp\client.json`에 저장된다.
+
+## 운영 기능
+
+- **Windows 서비스:** `publish.bat`은 `publish\server-service`에 서비스 배포 폴더를 만든다. `ChatApp.Server\appsettings.example.json`을 `ChatApp.Server\appsettings.json`으로 복사해 DB/TLS 설정을 입력한 뒤, 관리자 권한으로 `install-server-service.bat`을 실행한다. 서비스 호스트는 서버 프로세스를 감시하고 예기치 않게 끝나면 5초 뒤 재시작한다. 제거는 `uninstall-server-service.bat`을 사용한다.
+- **UTC:** DB 저장과 서버 간 전달 시각은 UTC이며, 화면에서만 PC의 현지 시각으로 표시한다. 기존 DB는 서비스와 클라이언트를 멈추고 전체 백업을 만든다. 먼저 `db/preview_009_utc_timestamps.sql`로 표본을 확인하고 저장 당시의 시간대를 확인한 다음, `migrate_009_utc_timestamps.sql` 맨 위의 `@legacy_offset_hours`와 `@utc_migration_confirmation`을 설정한다. 한국 표준시로 확인한 경우 오프셋 `9`, 그 외 시간대면 실제 UTC 오프셋을 입력한다. 백업과 원본 시간대 확인을 마친 뒤 확인 문자열을 `BACKUP_DONE_AND_SOURCE_TIMEZONE_CONFIRMED`로 설정한다. 미확인/기본 상태에서는 변환과 버전 기록이 모두 건너뛰어진다. 버전 9가 이미 기록된 DB는 재변환되지 않는다.
+- **LDAP/AD:** `appsettings.json`의 `Ldap.Enabled`, `Server`, `Port`(LDAPS 기본 636), `UserPrincipalNameSuffix`를 설정한다. 사원 계정은 관리자가 기존 `users` 행에 미리 등록하고 `auth_source='LDAP'`, `password_hash=NULL`, `salt=NULL`, `status='ACTIVE'`로 승인해야 한다. 선택 항목인 `ProfileBaseDn`과 LDAP 속성 매핑을 설정하면 로그인 성공 뒤 이름·부서·직급만 동기화한다. 동기화는 계정을 새로 만들거나 상태·역할·이메일을 바꾸지 않는다. LDAP 비밀번호는 저장하지 않으며, LDAP 계정은 자동 로그인 토큰을 쓰지 않아 AD 인증을 매번 확인한다.
+- **기기별 자동 로그인:** 010 적용 후 토큰은 사원번호와 클라이언트 설치별 ID로 각각 저장된다. 기존 단일 토큰은 `legacy` 기기에 보존해 구버전 클라이언트도 당분간 사용할 수 있다. 새 클라이언트는 최초 비밀번호 로그인 후 기기별 토큰으로 전환한다.
+- **관리 통계:** 관리자 창의 `통계` 탭에서 온라인/활성/승인 대기/정지 계정, 열린 방, 메시지 수, 저장 파일 수와 용량을 확인한다. 서버가 통계를 요청할 때 DB에서 집계한다.
   - 다음 접속부터는 자동으로 비교한다. 지문이 다르면(서버 인증서 교체 또는 중간자 공격) 경고 창을 띄우고, 사용자가 확인하기 전에는 연결하지 않는다.
   - 자동 재접속 중에 지문이 바뀌면 재시도를 멈추고 알린다.
   - 로그인 화면 → 서버 설정 → "보안 연결(TLS) 사용" 체크로 끌 수 있다(평문 서버용).
@@ -96,6 +119,27 @@ dotnet run --project ChatApp.ConsoleClient       # 창을 2~3개 띄워서 테�
 클라이언트: 시작하면 `1) 로그인 2) 회원가입` 메뉴가 나온다. 로그인 후 그냥 입력 = 전체 채팅, `/w 사원번호 내용` = 귓속말, `/quit` = 종료
 콘솔 파일 명령: `/file 경로` (방에 파일), `/dm 사원번호 경로` (1:1 파일), `/get 파일ID [저장경로]` (받기)
 
+## 배포 (설치 파일)
+
+솔루션 폴더에서 `publish.bat`을 실행하면 `publish` 폴더가 만들어진다.
+
+- `publish\client` — 직원 PC용 단일 exe (.NET을 따로 설치하지 않아도 실행된다)
+- `publish\server` — 서버 PC에 복사할 서버 프로그램 + DB 스크립트 + 설정 예시
+- `publish\사내톡-설치-버전.exe` — [Inno Setup 6](https://jrsoftware.org/isinfo.php)이 설치되어 있으면 함께 만들어진다. 관리자 권한 없이 설치되고, 바로 가기와 제거 항목이 생긴다 (`installer\ChatApp.iss`)
+
+새 버전을 낼 때는 `ChatApp.Client.csproj`의 `<Version>`을 올리고, 서버 `appsettings.json`의 `ClientLatestVersion`(같은 값)과 `ClientUpdateUrl`(설치 파일 위치)을 적는다. 옛 버전 사용자에게 "새 버전" 안내가 뜨고, 메뉴에서 바로 설치 파일을 열 수 있다.
+
+## 테스트
+
+```bash
+dotnet test ChatApp.Tests      # 또는 Visual Studio: 테스트 → 모든 테스트 실행
+```
+
+- 단위·통합 테스트 83개를 돈다. 패킷 직렬화, 패킷 경계(TCP 분할 수신), 파일 이름 정리, 비밀번호 해시, 설정 파일, TLS 지문 고정, 실제 서버에 소켓 접속하는 테스트가 들어 있다.
+- DB 없이 돌아서 GitHub Actions가 푸시마다 자동으로 실행한다(위 Build 배지).
+- FlaUI 화면 테스트(`ChatApp.UiTests`)는 로그인 창 컨트롤, TLS 옵션 열기와 토글을 자동 확인한다.
+- DB가 필요한 로그인·관리자 흐름은 실제 MariaDB로 시나리오 테스트를 했다. 결과와 화면 점검표는 [docs/TESTING.md](docs/TESTING.md)에 있다.
+
 ## 부하 테스트 (ChatApp.LoadTest)
 
 가상 사용자 N명이 동시에 접속해 "전체 채팅"에서 일정 간격으로 메시지를 보내고, 모두가 모든 메시지를 빠짐없이·순서대로·얼마나 빨리 받는지 잰다.
@@ -135,6 +179,7 @@ TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리�
 - [x] 사내 이메일 도메인 여러 개 허용(설정 파일), 회원가입 화면에서 도메인 선택
 - [x] 메신저 스타일 UI: 친구 목록 창 + 따로 뜨는 1:1·채팅방 대화창, 말풍선, 안 읽은 메시지 배지, 작업 표시줄 깜빡임
 - [x] 대화 기록: DB 작업 스레드가 배치 저장, 방 입장·1:1 창 열 때 최근 50개 불러오기(파일 포함)
+- [x] 방 파일 모아보기: 현재 로드된 대화 밖의 파일도 멤버 권한과 가입 시각을 확인해 서버에서 페이지 조회
 - [x] 5단계 파일 전송: 파일·사진·동영상(최대 3GB), 256KB 조각 전송(전송 중에도 채팅 가능), 사진 미리보기, 진행률, [+] 메뉴(사진/동영상/파일 따로 선택)·끌어다 놓기·Ctrl+V, 서버 보관(DB files + uploads 폴더), 방 멤버/1:1 당사자만 받기
 - [x] 하트비트: 클라이언트 15초마다 Ping, 서버·클라이언트 모두 45초 무응답이면 끊김 처리
 - [x] 자동 재접속: 2→4→8→16→30초 간격 재시도, 자동 재로그인, 참여 방 복구, 끊긴 동안의 대화 채우기. 같은 계정 새 로그인 시 이전 연결은 ForceLogout(재접속 안 함)
@@ -146,4 +191,13 @@ TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리�
 - [x] 관리자 기능: 가입 승인·거절, 정지·퇴사(즉시 끊김), 잠금 해제, 임시 비밀번호 발급과 변경 강제, 강제 로그아웃, 관리자 지정. 관리자 창과 서버 콘솔 명령
 - [x] 감사 로그: 로그인·파일·관리 동작 기록(전용 기록 스레드), 관리자 창에서 검색
 - [x] 비밀번호 변경 (내 이름 메뉴)
-- [ ] 6단계: 테스트, 문서화
+- [x] 6단계 테스트: xUnit 단위·통합 테스트 56개(CI 자동 실행), 관리자 시나리오 32개, TLS 검증, 부하 테스트(100·300·500명)
+- [x] 6단계 문서화: README, 테스트 결과서(docs/TESTING.md), 코드 주석, CI 빌드 배지
+- [x] 서버 안정성: 연결 수·IP당 연결 수 제한, 로그인 제한 시간, 보내기 큐 용량(바이트) 제한, 프로토콜 버전 확인, 모르는 패킷 무시, 예외로 스레드가 죽지 않게 정리
+- [x] 보안·운영: 로그인·가입 속도 제한(IP별), 로그인 시간 차 공격 방지, 보관 기간 자동 정리(대화 365일·파일 180일·감사 730일), DB 백업 스크립트, DB 버전 확인
+- [x] 클라이언트 개선: 전용 송신 스레드(파일을 보내는 중에도 채팅이 바로 나감), 받은 파일에 "인터넷에서 받음" 표시, 위험 확장자 추가, 로그아웃, 창 자원(GDI) 누수 정리
+- [x] 답장·공감(이모지 6가지)·메시지 삭제(24시간, 관리자는 모두), 읽음 숫자(카카오톡의 노란 숫자)
+- [x] 영구 채팅방(서버를 다시 켜도 유지)·비공개 방과 초대, 멤버/접속 인원 표시
+- [x] 접속하지 않은 사람에게 1:1 메시지·파일, 로그인 때 "안 읽은 1:1" 알림, 동료 찾기(오프라인 포함)
+- [x] 전체 대화 검색(서버 DB, 내가 볼 수 있는 대화만), 결과에서 그 메시지로 이동
+- [x] 배포: publish.bat, Inno Setup 설치 파일, 새 버전 안내

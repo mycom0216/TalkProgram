@@ -37,9 +37,16 @@ public static class PacketSerializer
     //   static readonly로 하나만 만들어 재사용하는 것이 권장 방식이다(스레드 안전하게 공유 가능).
     private static readonly JsonSerializerOptions Options = new()
     {
-        Converters = { new JsonStringEnumConverter() }, // enum을 숫자 대신 "ChatMsg" 같은 문자열로
+        // [주의] 순서가 중요하다. 변환기는 앞에서부터 "이 타입을 처리할 수 있나?"를 묻는다.
+        //   PacketType 전용 변환기(모르는 이름 → Unknown)를 일반 enum 변환기보다 먼저 둔다.
+        Converters = { new PacketTypeConverter(), new JsonStringEnumConverter() }, // enum을 숫자 대신 "ChatMsg" 같은 문자열로
         // [왜] enum을 숫자(예: 7)로 보내면 PacketType 중간에 새 값을 끼워 넣는 순간 번호가 밀려
         //   옛 클라이언트와 새 서버가 서로 다른 뜻으로 해석한다. 이름 문자열이면 순서가 바뀌어도 안전하고 로그도 읽기 쉽다.
+        // [왜] 값이 null인 칸은 JSON에서 아예 뺀다. 패킷마다 "ReplyTo":null 같은 빈 칸이 붙으면
+        //   방 인원 × 메시지 수만큼 쓸데없이 커진다. 받는 쪽은 빠진 칸을 null로 읽으므로 결과는 같다.
+        // [주의] WhenWritingDefault(0·false도 빼기)는 쓰면 안 된다. Success = false가 빠지면, 받는 쪽은
+        //   초기값(Success = true)으로 읽어 "실패"가 "성공"으로 바뀐다.
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // 한글을 \uXXXX로 바꾸지 않고 그대로(패킷 크기↓, 디버깅 편함)
         // [주의] 이름의 "Unsafe"는 HTML 페이지에 그대로 끼워 넣을 때 위험하다는 뜻이다. 여기서는 웹 페이지가 아니라
         //   우리 프로그램끼리 주고받는 데이터이므로 문제없다.
@@ -89,4 +96,25 @@ public static class PacketSerializer
             return null;
         }
     }
+}
+
+/// <summary>
+/// PacketType ⇄ 문자열. 모르는 이름(더 새 버전의 패킷)은 예외 대신 PacketType.Unknown으로 읽는다.
+/// </summary>
+// [개념] JsonConverter&lt;T&gt;: System.Text.Json에 "이 타입은 이렇게 읽고 써라"를 직접 알려 주는 클래스.
+public sealed class PacketTypeConverter : JsonConverter<PacketType>
+{
+    public override PacketType Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        // 숫자로 온 경우(아주 옛 형식)도 받아 준다
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int number) && Enum.IsDefined(typeof(PacketType), number))
+            return (PacketType)number;
+        // [개념] Enum.TryParse: 문자열을 enum으로. 실패해도 예외 없이 false. ignoreCase: false = 정확히 같은 이름만.
+        return reader.TokenType == JsonTokenType.String && Enum.TryParse(reader.GetString(), ignoreCase: false, out PacketType type)
+            ? type
+            : PacketType.Unknown;
+    }
+
+    public override void Write(Utf8JsonWriter writer, PacketType value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToString());
 }

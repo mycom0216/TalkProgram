@@ -1,4 +1,7 @@
 using System.Security.Cryptography;
+using System.DirectoryServices.Protocols;
+using System.Net;
+using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using ChatApp.Common.Models;
 using ChatApp.Server.Data;
@@ -89,6 +92,10 @@ public sealed class AuthService
         AnyEmailDomain = _config.AnyEmailDomain,
         AutoApprove = _config.AutoApprove,
         MaxFileSize = _config.MaxFileSizeBytes,
+        ProtocolVersion = ChatApp.Common.Protocol.ProtocolInfo.Version,
+        MinProtocolVersion = ChatApp.Common.Protocol.ProtocolInfo.MinSupported,
+        LatestClientVersion = string.IsNullOrWhiteSpace(_config.ClientLatestVersion) ? null : _config.ClientLatestVersion.Trim(),
+        ClientUpdateUrl = string.IsNullOrWhiteSpace(_config.ClientUpdateUrl) ? null : _config.ClientUpdateUrl.Trim(),
     };
 
     /// <summary>
@@ -168,21 +175,43 @@ public sealed class AuthService
         string no = req.EmployeeNo.Trim();
         if (no.Length == 0 || req.Password.Length == 0) return (null, wrong);
 
+        // [왜] 같은 사원번호의 로그인 시도는 한 번에 하나씩 처리한다.
+        //      "잠금 확인 → 비밀번호 확인 → 실패 기록"이 한 덩어리가 아니면, 연결 수십 개로 동시에 시도해
+        //      잠금(5회)이 걸리기 전에 5번보다 훨씬 많이 추측할 수 있다.
+        // [개념] 줄무늬 잠금(lock striping): 사원번호마다 lock 객체를 만들면 메모리가 계속 늘어나므로,
+        //      해시값으로 64개 중 하나를 골라 쓴다. 다른 사람끼리 같은 lock을 쓸 수도 있지만 잠깐 기다릴 뿐 틀리지는 않는다.
+        lock (LoginLocks[(no.GetHashCode() & int.MaxValue) % LoginLocks.Length])
+            return LoginLocked(no, req, wrong);
+    }
+
+    private static readonly object[] LoginLocks = Enumerable.Range(0, 64).Select(_ => new object()).ToArray();
+
+    // 없는 사원번호일 때도 비밀번호 확인과 비슷한 시간을 쓰기 위한 가짜 해시 (서버 시작 때 1번 만든다)
+    private static readonly (string Hash, string Salt) DummyHash = PasswordHasher.Hash("dummy-password-for-timing");
+
+    private (UserInfo? User, string Message) LoginLocked(string no, LoginRequest req, string wrong)
+    {
         // [개념] UserRecord? : 못 찾으면 null을 돌려준다.
         UserRecord? user = _users.FindByEmployeeNo(no);
-        if (user is null) return (null, wrong);
+        if (user is null)
+        {
+            // [왜] 없는 사원번호면 바로 답하면, 응답이 "비밀번호 확인(약 0.1초)"보다 눈에 띄게 빨라
+            //      시간만 재도 "이 사원번호는 없다"를 알 수 있다(계정 열거). 같은 계산을 한 번 해서 시간을 맞춘다.
+            PasswordHasher.Verify(req.Password, DummyHash.Hash, DummyHash.Salt);
+            return (null, wrong);
+        }
 
         // [왜] SC-02: 비밀번호를 연속으로 여러 번 틀리면 일정 시간 잠근다 → 비밀번호를 하나씩 대입하는 무차별 대입(brute force) 공격을 막는다.
         //   잠금 확인을 비밀번호 검증보다 "먼저" 해야, 잠긴 동안에는 맞는 비밀번호를 넣어도 시도 자체가 막힌다.
         if (user.LockMinutesLeft > 0)
             return (null, $"로그인 시도 횟수를 초과했습니다. {user.LockMinutesLeft}분 후 다시 시도하세요.");
 
-        // [왜] 나중에 회사 계정(LDAP/AD)으로 로그인하는 사용자는 비밀번호를 우리 DB에 저장하지 않는다(AuthSource = LDAP).
-        if (user.AuthSource != "LOCAL" || user.PasswordHash is null || user.Salt is null)
-            return (null, "사내 계정(LDAP) 로그인은 아직 지원하지 않습니다."); // TODO(7단계): LdapAuthService
-
-        // [개념] 비밀번호 검증 = 입력한 비밀번호를 저장된 salt로 똑같이 해시해서 저장된 해시와 비교한다(원문을 복원하는 게 아님).
-        if (!PasswordHasher.Verify(req.Password, user.PasswordHash, user.Salt))
+        LdapProfile? ldapProfile = null;
+        bool authenticated = user.AuthSource == "LDAP"
+            ? VerifyLdap(user.EmployeeNo, req.Password, out ldapProfile)
+            : user.AuthSource == "LOCAL" && user.PasswordHash is not null && user.Salt is not null
+                && PasswordHasher.Verify(req.Password, user.PasswordHash, user.Salt);
+        if (!authenticated)
         {
             // 실패 횟수 +1, 한도에 도달하면 잠금 시각 설정 (UserRepository에서 UPDATE 한 문장으로 원자적으로 처리)
             _users.RecordLoginFailure(no, _config.MaxLoginAttempts, _config.LockMinutes);
@@ -199,6 +228,12 @@ public sealed class AuthService
             case "RESIGNED": return (null, "사용할 수 없는 계정입니다.");
         }
 
+        if (ldapProfile is not null)
+        {
+            _users.UpdateLdapProfile(user.EmployeeNo, ldapProfile.Name, ldapProfile.Department, ldapProfile.Position);
+            user = _users.FindByEmployeeNo(user.EmployeeNo) ?? user;
+        }
+
         // [왜] DB 행(UserRecord)에는 비밀번호 해시·salt가 있으므로 그대로 보내면 안 된다.
         //   화면에 필요한 정보만 담은 UserInfo로 옮겨서 클라이언트에 보낸다(민감 정보 노출 방지).
         var info = new UserInfo
@@ -213,6 +248,63 @@ public sealed class AuthService
         };
         return (info, $"{info.DisplayName}님, 환영합니다!");
     }
+
+    private sealed record LdapProfile(string? Name, string? Department, string? Position);
+
+    private bool VerifyLdap(string employeeNo, string password, out LdapProfile? profile)
+    {
+        profile = null;
+        LdapConfig ldap = _config.Ldap;
+        if (!ldap.Enabled || string.IsNullOrWhiteSpace(ldap.Server) || string.IsNullOrWhiteSpace(ldap.UserPrincipalNameSuffix) || password.Length == 0)
+            return false;
+        try
+        {
+            var identifier = new LdapDirectoryIdentifier(ldap.Server, ldap.Port, fullyQualifiedDnsHostName: true, connectionless: false);
+            using var connection = new LdapConnection(identifier,
+                new NetworkCredential($"{employeeNo}@{ldap.UserPrincipalNameSuffix.TrimStart('@')}", password), AuthType.Basic);
+            connection.Timeout = TimeSpan.FromSeconds(Math.Clamp(ldap.TimeoutSeconds, 1, 20));
+            connection.SessionOptions.ProtocolVersion = 3;
+            connection.SessionOptions.SecureSocketLayer = true;
+            connection.Bind();
+            if (!string.IsNullOrWhiteSpace(ldap.ProfileBaseDn) && IsLdapAttributeName(ldap.EmployeeNumberAttribute))
+            {
+                try
+                {
+                    string[] attributes = new[] { ldap.DisplayNameAttribute, ldap.DepartmentAttribute, ldap.PositionAttribute }
+                        .Where(IsLdapAttributeName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                    var search = new System.DirectoryServices.Protocols.SearchRequest(ldap.ProfileBaseDn,
+                        $"({ldap.EmployeeNumberAttribute}={EscapeLdapFilter(employeeNo)})", SearchScope.Subtree, attributes);
+                    if (connection.SendRequest(search) is SearchResponse { Entries.Count: > 0 } response)
+                    {
+                        SearchResultEntry entry = response.Entries[0];
+                        profile = new LdapProfile(ReadLdapValue(entry, ldap.DisplayNameAttribute),
+                            ReadLdapValue(entry, ldap.DepartmentAttribute), ReadLdapValue(entry, ldap.PositionAttribute));
+                    }
+                }
+                catch (Exception ex) when (ex is LdapException or DirectoryOperationException or TimeoutException)
+                {
+                    // Profile reads are optional: successful password verification remains authoritative.
+                }
+            }
+            return true;
+        }
+        catch (Exception ex) when (ex is LdapException or SocketException or DirectoryOperationException or TimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsLdapAttributeName(string? value)
+        => value is { Length: > 0 and <= 64 } && value.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
+
+    private static string EscapeLdapFilter(string value)
+        => value.Replace("\\", "\\5c", StringComparison.Ordinal).Replace("*", "\\2a", StringComparison.Ordinal)
+            .Replace("(", "\\28", StringComparison.Ordinal).Replace(")", "\\29", StringComparison.Ordinal)
+            .Replace("\0", "\\00", StringComparison.Ordinal);
+
+    private static string? ReadLdapValue(SearchResultEntry entry, string attribute)
+        => IsLdapAttributeName(attribute) && entry.Attributes[attribute] is DirectoryAttribute values && values.Count > 0
+            ? values[0]?.ToString()?.Trim() : null;
 
     /// <summary>
     /// 로그인 최종 성공 기록(실패 횟수 0으로 초기화, 마지막 로그인 시각 저장).

@@ -23,7 +23,10 @@ if (!File.Exists(configPath))
 ServerConfig config = ServerConfig.Load(configPath);
 if (args.Length > 0 && int.TryParse(args[0], out int port)) config.Port = port;
 
-string logPath = Path.Combine(AppContext.BaseDirectory, "logs", $"server-{DateTime.Now:yyyyMMdd}.log");
+string logPath = Path.Combine(
+    AppContext.BaseDirectory,
+    "logs",
+    $"server-{DateTime.UtcNow:yyyyMMdd}-pid{Environment.ProcessId}.log");
 using var log = new ServerLogger(logPath);
 
 // ── DB 연결 확인 ──
@@ -48,6 +51,24 @@ var roomRepository = new RoomRepository(db);
 roomRepository.EnsureLobby(); // 기본 방 "전체 채팅"(1번)
 
 var fileRepository = new FileRepository(db);
+// [왜] 새 기능(영구 방·읽음 표시·답장 등)은 DB에 새 표·칸이 필요하다. 스크립트를 안 돌린 채 켜면
+//      기능이 이상하게 실패하므로, 시작할 때 분명히 알려 준다.
+int schema = db.SchemaVersion();
+if (schema < Db.RequiredSchemaVersion)
+{
+    log.Error($"DB가 오래된 버전입니다(현재 {schema}, 필요 {Db.RequiredSchemaVersion}). 아래 스크립트를 root로 실행한 뒤 서버를 다시 켜세요:");
+    if (schema < 9)
+    {
+        log.Error(@"  009는 db\preview_009_utc_timestamps.sql을 먼저 검토하고 전체 백업 및 저장 시간대 확인 후 적용하세요.");
+        log.Error(@"  db\migrate_009_utc_timestamps.sql");
+    }
+    log.Error(@"  db\migrate_010_device_login_tokens.sql (009까지 먼저 적용)");
+    log.Error(@"  예) ""C:\Program Files\MariaDB 13.0\bin\mysql.exe"" -u root -p chatapp < db\migrate_010_device_login_tokens.sql");
+    // [왜] 그대로 켜면 메시지 저장이 칸 없음 오류로 계속 실패한다(대화가 조용히 사라짐). 여기서 멈추는 편이 안전하다.
+    Environment.ExitCode = 1;
+    return;
+}
+
 if (!fileRepository.TableExists())
 {
     log.Error("DB에 files 테이블이 없어 파일 전송을 쓸 수 없습니다. (채팅은 정상 동작)");
@@ -76,8 +97,20 @@ else
 }
 
 var server = new ChatServer(IPAddress.Any, config.Port, auth, roomRepository, fileRepository, new MessageRepository(db),
-                            userRepository, auditRepository, audit, config, log, tls?.Context);
-server.Start();
+                            userRepository, auditRepository, audit, config, log, tls?.Context, db);
+try
+{
+    server.Start();
+}
+catch (System.Net.Sockets.SocketException ex) when (ex.SocketErrorCode == System.Net.Sockets.SocketError.AddressAlreadyInUse)
+{
+    // [왜] 같은 포트를 다른 프로그램(대개 이미 켜져 있는 서버)이 쓰고 있으면 여기서 실패한다.
+    //      예외로 죽는 대신 원인을 알려 주고 끝낸다. (Visual Studio에서 ▶를 한 번 더 눌러 서버가 두 개 뜨는 경우가 흔하다)
+    log.Error($"포트 {config.Port}을(를) 이미 다른 프로그램이 쓰고 있습니다. 서버가 이미 실행 중인지 확인하세요.");
+    log.Error("사내톡 창만 하나 더 띄우려면: 솔루션 탐색기에서 ChatApp.Client 오른쪽 클릭 → 디버그 → 새 인스턴스 시작");
+    server.Stop();
+    return;
+}
 audit.Record(AuditActions.ServerStart, AdminService.ConsoleActor, detail: tls is null ? "평문" : "TLS");
 log.Info($"가입 허용 이메일: {auth.GetServerInfo().DomainsText}, 가입 즉시 승인: {config.AutoApprove}");
 log.Info($"파일 저장 폴더: {config.UploadRoot} (최대 {config.MaxFileSizeMB}MB)");
@@ -91,11 +124,37 @@ if (pendingCount > 0) log.Info($"승인 대기 중인 가입 신청 {pendingCoun
 
 PrintHelp();
 
-// 메인 스레드는 관리자 콘솔 입력만 담당한다. (Accept·수신·로그는 각자 다른 스레드)
-while (true)
+// ── 종료 신호 처리 ──
+// [왜] Ctrl+C, 창 닫기, Windows 서비스 중지(SIGTERM) 때도 "남은 대화·감사 기록 저장 → 접속 정리" 순서로 끝내야 한다.
+//      처리하지 않으면 프로세스가 바로 죽어서, 아직 큐에 있던(저장 전) 대화가 사라진다.
+var shutdown = new ManualResetEventSlim(false);
+Console.CancelKeyPress += (_, e) =>
 {
-    string? line = Console.ReadLine();
-    if (line is null || line == "/quit") break;
+    e.Cancel = true;   // 바로 죽지 말고 아래 정상 종료 경로로
+    shutdown.Set();
+};
+AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+{
+    // 서비스 중지·SIGTERM 등. Stop은 두 번 불려도 한 번만 실행되고, 감사 로그 정리도 여러 번 불려도 안전하다.
+    server.Stop();
+    audit.Dispose();
+};
+
+// 콘솔 입력은 별도 스레드에서 읽는다. 입력이 없는 환경(서비스, 백그라운드 실행)에서는 ReadLine이 바로 null을 돌려주는데,
+// 그렇다고 서버를 끄면 안 되므로 그때는 종료 신호(Ctrl+C 등)만 기다린다.
+var commands = new System.Collections.Concurrent.BlockingCollection<string>();
+new Thread(() =>
+{
+    while (Console.ReadLine() is string input) commands.Add(input);
+    // 입력 끝(null) = 콘솔이 없음 → 명령은 더 받지 않지만 서버는 계속 돈다
+}) { IsBackground = true, Name = "Console" }.Start();
+
+// 메인 스레드는 관리자 명령 처리만 담당한다. (Accept·수신·로그는 각자 다른 스레드)
+while (!shutdown.IsSet)
+{
+    // [개념] TryTake(out x, 200): 0.2초 동안 명령을 기다린다. 없으면 false → 다시 종료 신호를 확인한다.
+    if (!commands.TryTake(out string? line, 200)) continue;
+    if (line == "/quit") break;
     line = line.Trim();
     if (line.Length == 0) continue;
 
@@ -116,7 +175,7 @@ while (true)
 
         case "/rooms":
             foreach (var r in server.Rooms.GetRoomInfos())
-                Console.WriteLine($"  #{r.RoomId} {r.Name} ({r.CapacityText}){(r.OwnerName is null ? "" : $" 방장: {r.OwnerName}")}");
+                Console.WriteLine($"  #{r.RoomId} {r.Name}{(r.IsPrivate ? " [비공개]" : "")} (멤버 {r.CapacityText}, 접속 {r.OnlineCount}){(r.OwnerName is null ? "" : $" 만든 사람: {r.OwnerName}")}");
             break;
 
         case "/notice":
@@ -158,6 +217,12 @@ while (true)
             catch (DbException ex) { log.Error($"DB 오류: {ex.Message}"); }
             break;
 
+        case "/cleanup":
+            // 보관 기간 정리를 지금 바로 실행 (보통은 하루 한 번 자동)
+            try { server.RunCleanup(); Console.WriteLine("  정리를 마쳤습니다. (자세한 내용은 위 로그)"); }
+            catch (DbException ex) { log.Error($"DB 오류: {ex.Message}"); }
+            break;
+
         case "/help":
             PrintHelp();
             break;
@@ -194,7 +259,7 @@ static void PrintHelp()
           /suspend 사원번호 [사유] 정지               /resign 사원번호  퇴사 처리      /activate 사원번호  정지·퇴사 해제
           /unlock 사원번호         로그인 잠금 해제     /resetpw 사원번호 임시 비밀번호 발급
           /kick 사원번호 [사유]    강제 로그아웃        /grant 사원번호   관리자 지정    /revoke 사원번호   관리자 해제
-          /audit [개수] [사원번호] 감사 로그
+          /audit [개수] [사원번호] 감사 로그         /cleanup          보관 기간 지난 대화·파일·로그 지금 정리
         """);
 }
 

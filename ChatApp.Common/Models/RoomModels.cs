@@ -23,10 +23,18 @@ public sealed class RoomInfo
     public string Name { get; set; } = "";
     public string? OwnerNo { get; set; }     // 방장 사원번호 (기본 방은 null)
     public string? OwnerName { get; set; }   // 방장 표시 이름
+    public string PinnedNotice { get; set; } = "";
 
     /// <summary>최대 인원. 0이면 제한 없음(기본 방).</summary>
     public int MaxUsers { get; set; }
-    public int MemberCount { get; set; }     // 보낼 당시의 현재 인원
+    public int MemberCount { get; set; }     // 멤버 수 (접속하지 않은 멤버 포함). 기본 방은 지금 접속한 사람 수
+    public int OnlineCount { get; set; }     // 지금 접속 중인 멤버 수
+
+    /// <summary>true = 비공개 방. 목록에는 멤버에게만 보이고, 초대로만 들어갈 수 있다.</summary>
+    public bool IsPrivate { get; set; }
+
+    /// <summary>멤버 목록과 읽음 위치. 입장 결과(RoomRes)·방 변경(RoomUpdate)에만 담고, 방 목록 방송에는 넣지 않는다(크기 절약).</summary>
+    public List<RoomMemberInfo>? Members { get; set; }
 
     // [개념] [JsonIgnore] + 계산 속성: RoomId만 있으면 알 수 있는 값이라 JSON으로 보내지 않는다.
     [JsonIgnore]
@@ -36,6 +44,14 @@ public sealed class RoomInfo
     // [개념] 삼항 연산자(조건 ? A : B)로 제한 없음(0)일 때와 있을 때 표시를 다르게 만든다.
     [JsonIgnore]
     public string CapacityText => MaxUsers == 0 ? $"{MemberCount}명" : $"{MemberCount}/{MaxUsers}";
+}
+
+/// <summary>채팅방 상단에 고정할 공지. 빈 글이면 기존 공지를 지운다.</summary>
+public sealed class RoomNoticeRequest
+{
+    public int RoomId { get; set; }
+    public string Text { get; set; } = "";
+    public const int MaxLength = 200;
 }
 
 /// <summary>방 만들기 요청 (클라이언트 → 서버, Packet.Data).</summary>
@@ -51,4 +67,32 @@ public sealed class CreateRoomRequest
 
     public string Name { get; set; } = "";
     public int MaxUsers { get; set; } = 10;
+
+    /// <summary>true = 비공개 방 (초대한 사람만 들어올 수 있음).</summary>
+    public bool IsPrivate { get; set; }
+
+    /// <summary>만들면서 바로 초대할 사람들 (선택).</summary>
+    public List<string> InviteNos { get; set; } = [];
+}
+
+/// <summary>방 멤버 한 명 (RoomRes·RoomUpdate의 RoomInfo.Members). 읽음 표시 계산에 쓴다.</summary>
+public sealed class RoomMemberInfo
+{
+    public string EmployeeNo { get; set; } = "";
+    public string DisplayName { get; set; } = "";   // "홍길동 대리"
+
+    /// <summary>이 사람이 이 방에서 마지막으로 읽은 메시지 시각. 아직 읽은 적 없으면 null.</summary>
+    public DateTime? LastReadAt { get; set; }
+
+    /// <summary>방에 들어온 시각. 들어오기 전 메시지는 이 사람의 "안 읽음"에 세지 않는다.</summary>
+    public DateTime JoinedAt { get; set; }
+}
+
+/// <summary>방 초대 (RoomInvite의 Data). 방 멤버만 초대할 수 있다.</summary>
+public sealed class RoomInviteRequest
+{
+    public const int MaxPerRequest = 50;
+
+    public int RoomId { get; set; }
+    public List<string> EmployeeNos { get; set; } = [];
 }

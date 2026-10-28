@@ -30,6 +30,16 @@ public sealed class ServerInfo
     // [개념] long: 3GB(약 32억 바이트)는 int 최댓값(약 21억)을 넘으므로 64비트 정수를 쓴다.
     public long MaxFileSize { get; set; } = FileRules.DefaultMaxFileSize;
 
+    /// <summary>서버의 프로토콜 버전과, 서버가 받아 주는 가장 낮은 클라이언트 버전 (ProtocolInfo 참고).</summary>
+    public int ProtocolVersion { get; set; }
+    public int MinProtocolVersion { get; set; }
+
+    /// <summary>관리자가 배포한 최신 클라이언트 버전(예: "1.3.0"). 비어 있으면 업데이트 안내를 하지 않는다.</summary>
+    public string? LatestClientVersion { get; set; }
+
+    /// <summary>최신 설치 파일 위치(사내 공유 폴더 경로나 웹 주소). 업데이트 안내를 누르면 연다.</summary>
+    public string? ClientUpdateUrl { get; set; }
+
     /// <summary>"@company.kr, @basiclike.kr" 또는 "제한 없음"</summary>
     // [개념] Select(d => "@" + d): LINQ. 목록의 각 요소를 변환한 새 목록을 만든다. string.Join은 구분자로 이어 붙인다.
     public string DomainsText => AnyEmailDomain ? "제한 없음" : string.Join(", ", AllowedEmailDomains.Select(d => "@" + d));

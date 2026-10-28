@@ -22,6 +22,8 @@ public sealed class FileTransferService
         public string Path { get; } = path;
         public readonly TaskCompletionSource<string?> Accepted = new(TaskCreationOptions.RunContinuationsAsynchronously); // null = 허락, 문자열 = 거절 이유
         public volatile string? FailReason; // 보내는 도중 서버가 실패를 알려 오면 채워진다
+        public volatile bool AllSent;       // 마지막 조각과 FileUploadEnd까지 보냄 (서버의 저장 결과만 남음)
+        public readonly CancellationTokenSource Cancel = new(); // 취소하면 큐 자리를 기다리던 SendBulk도 바로 깨어난다
     }
 
     private sealed class DownloadJob(string fileId, string destination)
@@ -42,13 +44,22 @@ public sealed class FileTransferService
     private static readonly TimeSpan AcceptTimeout = TimeSpan.FromSeconds(30);
 
     private readonly Func<Packet, bool> _send;
+    private readonly Func<Packet, CancellationToken, bool> _sendBulk;
     private readonly ConcurrentDictionary<string, UploadJob> _uploads = new();
     private readonly SemaphoreSlim _uploadSlots = new(FileRules.MaxActiveTransfers);
     private readonly object _downloadLock = new();
     private readonly Dictionary<string, DownloadJob> _downloads = [];
 
     /// <param name="send">패킷 전송 함수(스레드 안전해야 함). 연결이 끊겼으면 false를 돌려줘야 한다.</param>
-    public FileTransferService(Func<Packet, bool> send) => _send = send;
+    /// <param name="sendBulk">
+    /// 파일 조각용 전송 함수(선택). 대량 큐에 넣고, 큐가 차 있으면 자리가 날 때까지 기다린다(ChatClient.SendBulk).
+    /// [왜] 조각을 일반 큐에 넣으면 채팅이 조각 수천 개 뒤에 줄을 서게 된다. 없으면 send를 그대로 쓴다.
+    /// </param>
+    public FileTransferService(Func<Packet, bool> send, Func<Packet, CancellationToken, bool>? sendBulk = null)
+    {
+        _send = send;
+        _sendBulk = sendBulk ?? ((packet, _) => send(packet));
+    }
 
     /// <summary>파일 1개 최대 크기. 서버 안내(ServerInfo)를 받으면 바꿔 준다.</summary>
     public long MaxFileSize { get; set; } = FileRules.DefaultMaxFileSize;
@@ -123,7 +134,9 @@ public sealed class FileTransferService
                 return;
             }
 
-            using var stream = new FileStream(job.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16);
+            // 업로드 실패 이벤트가 파일 핸들 닫힘보다 먼저 UI/테스트에 도착할 수 있다.
+            // Windows에서 사용자가 원본 파일을 정리할 수 있도록 삭제 공유도 허용한다.
+            using var stream = new FileStream(job.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
             if (stream.Length != offer.Size)
             {
                 Fail(job, "보내는 도중 파일이 바뀌었습니다.");
@@ -141,9 +154,9 @@ public sealed class FileTransferService
                 if (read == 0) break;
                 if (read < buffer.Length) Array.Resize(ref buffer, read);
 
-                if (!_send(new Packet { Type = PacketType.FileChunk, Target = job.FileId, Bin = buffer }))
+                if (!_sendBulk(new Packet { Type = PacketType.FileChunk, Target = job.FileId, Bin = buffer }, job.Cancel.Token))
                 {
-                    Fail(job, "보내는 도중 서버와 연결이 끊어졌습니다.");
+                    Fail(job, job.FailReason ?? "보내는 도중 서버와 연결이 끊어졌습니다.");
                     return;
                 }
                 sent += read;
@@ -160,13 +173,25 @@ public sealed class FileTransferService
                 Fail(job, "보내는 도중 파일이 바뀌었습니다.");
                 return;
             }
-            _send(Packet.Create(PacketType.FileUploadEnd, target: job.FileId));
+            // [주의] 끝 알림도 대량 큐로 보낸다. 일반 큐로 보내면 아직 대량 큐에 남은 마지막 조각들보다 먼저 나가서
+            //        서버가 "크기가 모자란다"며 실패 처리한다(두 큐 사이의 순서는 보장되지 않는다).
+            if (!_sendBulk(Packet.Create(PacketType.FileUploadEnd, target: job.FileId), job.Cancel.Token))
+            {
+                Fail(job, job.FailReason ?? "보내는 도중 서버와 연결이 끊어졌습니다.");
+                return;
+            }
+            job.AllSent = true;
             UploadSent?.Invoke(job.FileId);
             // 이후 서버가 저장에 실패하면 FileUploadRes(실패)가 오므로 job은 FileMsg를 받을 때까지 남겨 둔다
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Fail(job, $"파일을 읽을 수 없습니다: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            // [주의] 작업 스레드에서 예외가 새면 프로그램 전체가 꺼진다. 어떤 오류든 이 파일만 실패로 처리한다.
+            Fail(job, $"보내지 못했습니다: {ex.Message}");
         }
         finally
         {
@@ -177,7 +202,10 @@ public sealed class FileTransferService
     private void Fail(UploadJob job, string reason)
     {
         if (_uploads.TryRemove(job.FileId, out _))
+        {
+            job.Cancel.Cancel();
             UploadFailed?.Invoke(job.FileId, reason);
+        }
     }
 
     // ───────────────────────── 내려받기 ─────────────────────────
@@ -317,6 +345,7 @@ public sealed class FileTransferService
             try
             {
                 File.Move(job.TempPath, job.Destination, overwrite: true);
+                MarkFromInternet(job.Destination);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -335,6 +364,25 @@ public sealed class FileTransferService
         }
     }
 
+    /// <summary>
+    /// 받은 파일에 "인터넷에서 받은 파일" 표시(Mark of the Web)를 붙인다. 윈도우에서만.
+    /// [왜] 브라우저로 받은 파일처럼 윈도우 SmartScreen·Office 보호된 보기가 동작하게 한다.
+    ///      메신저로 받은 실행 파일·매크로 문서를 열 때 윈도우가 한 번 더 경고해 준다.
+    /// [개념] NTFS 대체 데이터 스트림(ADS): "파일:Zone.Identifier"라는 숨은 꼬리 데이터. ZoneId=3 = 인터넷 영역.
+    /// </summary>
+    private static void MarkFromInternet(string path)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            File.WriteAllText(path + ":Zone.Identifier", "[ZoneTransfer]\r\nZoneId=3\r\n");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // FAT32·USB 등 ADS를 지원하지 않는 디스크면 표시 없이 넘어간다
+        }
+    }
+
     // ───────────────────────── 취소 ─────────────────────────
 
     /// <summary>
@@ -346,6 +394,7 @@ public sealed class FileTransferService
         if (!_uploads.TryRemove(fileId, out UploadJob? job)) return false;
         job.FailReason = "취소";             // 보내는 중이면 다음 조각 전에 멈춘다
         job.Accepted.TrySetResult("취소");   // 서버 허락을 기다리는 중이면 바로 깨운다
+        job.Cancel.Cancel();                 // 대량 큐 자리를 기다리는 중이면 바로 깨운다
         _send(Packet.Create(PacketType.FileUploadCancel, target: fileId));
         return true;
     }
@@ -371,7 +420,8 @@ public sealed class FileTransferService
         {
             job.FailReason = reason;
             job.Accepted.TrySetResult(reason);
-            Fail(job, reason);
+            // 끝까지 보낸 뒤 서버의 저장 결과를 기다리던 파일은, 서버가 이미 저장했을 수도 있다
+            Fail(job, job.AllSent ? $"{reason} (서버에 저장됐는지 확인하지 못했습니다. 다시 접속한 뒤 대화 기록에서 확인하세요)" : reason);
         }
         List<string> ids;
         lock (_downloadLock) ids = _downloads.Keys.ToList();

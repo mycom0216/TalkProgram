@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace ChatApp.Client;
 
@@ -25,12 +27,32 @@ public sealed class ClientSettings
     public string Host { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 9000;
     public string LastEmployeeNo { get; set; } = "";
+    /// <summary>설치별 자동 로그인 토큰을 서버에서 분리 관리하는 무작위 기기 ID.</summary>
+    public string DeviceId { get; set; } = Guid.NewGuid().ToString("N");
 
     /// <summary>로그인 화면의 "사원번호 기억" 체크 상태. false면 LastEmployeeNo를 비워 저장한다.</summary>
     public bool RememberEmployeeNo { get; set; } = true;
 
     /// <summary>true면 TLS(암호화)로 접속한다. 서버가 Tls.Enabled=false(평문)인 테스트 서버에 붙을 때만 끈다.</summary>
     public bool UseTls { get; set; } = true;
+
+    /// <summary>알림을 끈 채팅방 번호. 설정은 이 PC의 client.json에 저장한다.</summary>
+    public List<int> MutedRoomIds { get; set; } = [];
+    public Dictionary<string, string> ProtectedLoginTokens { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    private static string LoginTokenKey(string host, int port, string employeeNo) => $"{host.Trim()}:{port}:{employeeNo.Trim()}";
+    public string? GetLoginToken(string host, int port, string employeeNo)
+    {
+        if (!ProtectedLoginTokens.TryGetValue(LoginTokenKey(host, port, employeeNo), out string? encrypted)) return null;
+        try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(encrypted), Encoding.UTF8.GetBytes("ChatApp.LoginToken.v1"), DataProtectionScope.CurrentUser)); }
+        catch (Exception ex) when (ex is CryptographicException or FormatException) { ProtectedLoginTokens.Remove(LoginTokenKey(host, port, employeeNo)); return null; }
+    }
+    public void SetLoginToken(string host, int port, string employeeNo, string? token)
+    {
+        string key = LoginTokenKey(host, port, employeeNo);
+        if (string.IsNullOrEmpty(token)) ProtectedLoginTokens.Remove(key);
+        else ProtectedLoginTokens[key] = Convert.ToBase64String(ProtectedData.Protect(Encoding.UTF8.GetBytes(token), Encoding.UTF8.GetBytes("ChatApp.LoginToken.v1"), DataProtectionScope.CurrentUser));
+    }
 
     /// <summary>
     /// 사용자가 "신뢰"한 서버 인증서 지문. 키 = "서버주소:포트", 값 = SHA-256 지문.
@@ -63,8 +85,18 @@ public sealed class ClientSettings
         try
         {
             if (File.Exists(FilePath))
+            {
                 // [개념] ?? new() : Deserialize가 null을 돌려주면(파일 내용이 "null" 등) 새 기본 객체를 쓴다.
-                return JsonSerializer.Deserialize<ClientSettings>(File.ReadAllText(FilePath)) ?? new();
+                ClientSettings settings = JsonSerializer.Deserialize<ClientSettings>(File.ReadAllText(FilePath)) ?? new();
+                if (settings.DeviceId is not { Length: 32 } || !settings.DeviceId.All(Uri.IsHexDigit))
+                    settings.DeviceId = Guid.NewGuid().ToString("N");
+                settings.MutedRoomIds ??= [];
+                settings.ProtectedLoginTokens = new Dictionary<string, string>(settings.ProtectedLoginTokens ?? [], StringComparer.OrdinalIgnoreCase);
+                // [주의] JSON에서 읽은 Dictionary는 "대소문자 구분" 비교로 새로 만들어진다(위의 OrdinalIgnoreCase가 사라짐).
+                //        그러면 "Server:9000"과 "server:9000"을 다른 서버로 보고 지문을 또 묻는다 → 비교 방식을 되살린다.
+                settings.TrustedServers = new Dictionary<string, string>(settings.TrustedServers ?? [], StringComparer.OrdinalIgnoreCase);
+                return settings;
+            }
         }
         // [개념] 예외 필터(catch ... when): 조건에 맞는 예외만 잡는다.
         //   IOException(파일 사용 중 등), JsonException(내용이 깨짐), UnauthorizedAccessException(권한 없음)만 잡고,
@@ -83,7 +115,11 @@ public sealed class ClientSettings
         {
             // [왜] 처음 실행하면 %LocalAppData%\ChatApp 폴더가 없으므로 먼저 만든다(이미 있으면 아무 일도 안 함).
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this));
+            // [왜] 임시 파일에 다 쓴 뒤 바꿔치기한다(원자적 저장). 쓰는 도중 프로그램이 꺼지거나 PC 전원이 나가도
+            //      반쯤 쓰인 깨진 설정 파일이 남지 않는다(깨지면 신뢰한 서버 지문까지 사라진다).
+            string temp = FilePath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(this));
+            File.Move(temp, FilePath, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

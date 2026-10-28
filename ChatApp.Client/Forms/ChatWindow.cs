@@ -55,6 +55,7 @@ internal enum ChatWindowKind { Room, Direct }
 // [개념] internal: 같은 프로젝트(ChatApp.Client) 안에서만 쓸 수 있다. 외부에 공개할 필요가 없는 화면 클래스라서.
 internal sealed class ChatWindow : Form
 {
+    private sealed record MentionCandidate(string EmployeeNo, string DisplayName);
     // [왜] 2000년대 메신저 느낌의 텍스트 이모티콘. 그림 이모지는 윈도우 글꼴에 따라 깨질 수 있어 글자로만 구성했다.
     // [개념] ["a", "b"] 는 C# 12의 "컬렉션 식". new string[] { "a", "b" } 와 같은 뜻이다.
     // [개념] "\\(^o^)/" 처럼 \\ 는 문자열 안에서 역슬래시(\) 한 글자를 뜻한다(이스케이프).
@@ -67,10 +68,31 @@ internal sealed class ChatWindow : Form
     private readonly GradientPanel _header = new();      // 위쪽 하늘색 그라데이션 머리
     private readonly BubbleChatView _view = new();       // 말풍선 대화 화면(직접 그리는 컨트롤)
     private readonly TextBox _input = new();             // 입력칸
+    private readonly ListBox _mentionList = new();
+    private readonly List<MentionCandidate> _mentionMatches = [];
+    private List<MentionCandidate> _mentionCandidates = [];
+    private int _mentionStart = -1;
     private readonly Button _sendButton = new();         // [전송]
     private readonly Button _emoticonButton = new();     // [☺] 이모티콘 메뉴 열기
     private readonly Button _attachButton = new();       // [+] 사진/동영상/파일 메뉴 열기
     private readonly Button _leaveButton = new();        // [나가기] (채팅방에서만 보임)
+    private readonly Button _inviteButton = new();       // [초대] (기본 방이 아닌 채팅방에서만 보임)
+    private readonly Button _deleteButton = new();       // [삭제] (방장·관리자에게만 보임)
+    private readonly Label _pinnedNotice = new();
+    private readonly Label _typingLabel = new();
+    private readonly System.Windows.Forms.Timer _typingTimer = new() { Interval = 2000 };
+    private readonly System.Windows.Forms.Timer _typingExpiryTimer = new() { Interval = 500 };
+    private readonly Dictionary<string, (string Name, DateTime Until)> _typingUntil = [];
+    // [왜] 툴팁은 창마다 하나만 만들어 모든 버튼이 함께 쓴다. 버튼마다 new ToolTip()을 하면 창을 닫아도 해제되지 않는다.
+    private readonly ToolTip _toolTip = new();
+    // [왜] 버튼 글꼴은 모든 창이 함께 쓴다(창을 열 때마다 new Font를 만들면 닫아도 GDI 글꼴이 남는다).
+    private static readonly Font AttachFont = new(Theme.Body.FontFamily, 17F, FontStyle.Bold);
+    private static readonly Font EmoticonFont = new(Theme.Body.FontFamily, 14F);
+
+    // ── 답장 ──
+    private readonly Panel _replyBar = new();
+    private readonly Label _replyLabel = new();
+    private ChatItem? _replyTo;
     // [개념] ContextMenuStrip: 원래는 오른쪽 클릭 메뉴용 컨트롤이지만, Show()로 원하는 위치에 직접 띄울 수도 있다.
     //        여기서는 버튼을 눌렀을 때 버튼 위쪽으로 뜨는 팝업 메뉴로 쓴다.
     private readonly ContextMenuStrip _emoticonMenu = new();
@@ -102,8 +124,22 @@ internal sealed class ChatWindow : Form
     //        이 창은 누가 구독하는지 몰라도 되므로(느슨한 결합) 화면과 통신 로직을 분리할 수 있다.
     // [개념] ? (nullable 이벤트): 아무도 구독하지 않았으면 null. 그래서 호출할 때 SendRequested?.Invoke(...)처럼 ?. 를 쓴다.
 
-    /// <summary>[전송] 또는 Enter: (이 창, 보낼 글).</summary>
-    public event Action<ChatWindow, string>? SendRequested;
+    /// <summary>[전송] 또는 Enter: (이 창, 보낼 글, 답장할 메시지 번호 또는 null).</summary>
+    public event Action<ChatWindow, string, long?>? SendRequested;
+    public event Action<ChatWindow, bool>? TypingActivity;
+
+    /// <summary>공감 누르기/취소: (이 창, 말풍선, 이모지).</summary>
+    public event Action<ChatWindow, ChatItem, string>? ReactionRequested;
+
+    /// <summary>메시지 삭제 요청.</summary>
+    public event Action<ChatWindow, ChatItem>? DeleteRequested;
+    public event Action<ChatWindow, ChatItem>? EditRequested;
+
+    /// <summary>[초대] 클릭 (채팅방만).</summary>
+    public event Action<ChatWindow>? InviteRequested;
+
+    /// <summary>[삭제] 클릭 (방장·관리자만).</summary>
+    public event Action<ChatWindow>? DeleteRoomRequested;
 
     /// <summary>[나가기] 클릭 (채팅방만).</summary>
     public event Action<ChatWindow>? LeaveRequested;
@@ -111,11 +147,15 @@ internal sealed class ChatWindow : Form
     /// <summary>창이 활성화됨 = 사용자가 지금 이 대화를 보고 있음 → 안 읽은 수를 0으로.</summary>
     public event Action<ChatWindow>? ReadAll;
 
+    /// <summary>스크롤을 맨 위로 올려 이전 대화를 요청.</summary>
+    public event Action<ChatWindow>? OlderHistoryRequested;
+
     /// <summary>보낼 파일 경로들 (📎, 끌어다 놓기, Ctrl+V).</summary>
     public event Action<ChatWindow, List<string>>? FilesRequested;
 
     /// <summary>파일 말풍선 열기/저장/폴더 보기.</summary>
     public event Action<ChatWindow, ChatItem, FileCommand>? FileCommandRequested;
+    public event Action<ChatWindow>? RoomFilesRequested;
 
     // [개념] DPI 대응: 화면 배율(125%, 150% 등)이 커지면 같은 "100픽셀"이 작아 보인다.
     //        LogicalToDeviceUnits는 "100% 기준 픽셀"을 현재 배율의 실제 픽셀로 바꿔 준다. 이름이 길어서 S()로 줄였다.
@@ -142,6 +182,8 @@ internal sealed class ChatWindow : Form
         StartPosition = FormStartPosition.WindowsDefaultLocation;
 
         BuildLayout();
+        _typingTimer.Tick += (_, _) => { _typingTimer.Stop(); TypingActivity?.Invoke(this, false); };
+        _typingExpiryTimer.Tick += (_, _) => RefreshTypingLabel();
 
         // 이미 쌓여 있던 메시지(창을 닫았다 다시 연 경우 등)를 한꺼번에 표시
         _view.SetItems(conversation.Items);
@@ -150,6 +192,8 @@ internal sealed class ChatWindow : Form
         conversation.ItemAdded += OnItemAdded;
         conversation.ItemChanged += OnItemChanged;
         conversation.Reloaded += OnReloaded;
+        conversation.ReadStateChanged += OnReadStateChanged;
+        _view.ReachedTop += OnReachedTop;
 
         // [개념] 람다식 (_, _) => { ... }: 이름 없는 메서드. FormClosed의 (sender, e) 인자를 안 쓰므로 _ 로 버린다.
         FormClosed += (_, _) =>
@@ -161,11 +205,20 @@ internal sealed class ChatWindow : Form
             conversation.ItemAdded -= OnItemAdded;
             conversation.ItemChanged -= OnItemChanged;
             conversation.Reloaded -= OnReloaded;
+            conversation.ReadStateChanged -= OnReadStateChanged;
+            _view.ReachedTop -= OnReachedTop;
+            _typingTimer.Stop();
+            _typingExpiryTimer.Stop();
+            TypingActivity?.Invoke(this, false);
         };
 
         // [왜] BubbleChatView는 "어느 창"인지 모른다. 이 창이 자기 자신(this)을 붙여서 메인 창에 다시 알린다(이벤트 전달).
         // [개념] 람다 캡처(closure): 람다 안에서 쓴 this는 람다가 만들어질 때의 이 창을 계속 가리킨다.
         _view.FileCommandRequested += (item, command) => FileCommandRequested?.Invoke(this, item, command);
+        _view.ReplyRequested += BeginReply;
+        _view.ReactionRequested += (item, emoji) => ReactionRequested?.Invoke(this, item, emoji);
+        _view.DeleteRequested += item => DeleteRequested?.Invoke(this, item);
+        _view.EditRequested += item => EditRequested?.Invoke(this, item);
 
         // 끌어다 놓기: 창 어디에 놓아도 보낸다
         // [개념] 드래그 앤 드롭: AllowDrop = true인 컨트롤만 놓기를 받을 수 있다.
@@ -184,8 +237,19 @@ internal sealed class ChatWindow : Form
         ActiveControl = _input; // 창이 실제로 활성화될 때 입력칸에 포커스 (자동으로 뜬 창이 포커스를 빼앗지 않게)
         // [주의] 여기서 _input.Focus()를 직접 부르면, 메시지가 와서 자동으로 뜬 창이 다른 프로그램에서 타이핑 중인
         //        사용자의 포커스를 빼앗는다. ActiveControl은 "활성화될 때 어디에 포커스를 줄지"만 정해 둔다.
-        Shown += (_, _) => _view.ScrollToBottom(); // 창이 만들어진 뒤에야 스크롤이 적용된다
+        Shown += (_, _) =>
+        {
+            _shown = true;
+            _view.ScrollToBottom(); // 창이 만들어진 뒤에야 스크롤이 적용된다
+            TryFocusPending();      // 검색 결과로 연 창이면 그 메시지로
+        };
         // [주의] 생성자 시점에는 창의 실제 크기(핸들)가 없어 스크롤 위치 계산이 틀린다. 처음 화면에 보인 직후(Shown)에 맨 아래로.
+    }
+
+    private void OnReachedTop()
+    {
+        if (Conversation.HistoryHasMore && !Conversation.HistoryLoading)
+            OlderHistoryRequested?.Invoke(this);
     }
 
     // ───────── 화면 구성 ─────────
@@ -206,6 +270,11 @@ internal sealed class ChatWindow : Form
         // [왜] 머리의 아바타·글자는 컨트롤(Label 등)로 만들지 않고 Paint 이벤트에서 직접 그린다.
         //      그라데이션 배경 위에 투명한 글자를 깔끔하게 올리기 쉽고, 컨트롤 수가 줄어 가볍다.
         _header.Paint += PaintHeader;
+        // 머리(방 이름 부분)를 누르면 방 메뉴 (멤버 보기, 방장 넘기기) — 메인 창이 HeaderMenu를 넣어 준 방만
+        _header.MouseClick += (_, e) =>
+        {
+            if (HeaderMenu is not null && e.Button is MouseButtons.Left or MouseButtons.Right) HeaderMenu.Show(_header, e.Location);
+        };
 
         // [나가기] 버튼: 하늘색 머리 위에 흰 테두리만 있는 납작한(Flat) 버튼
         _leaveButton.Text = "나가기";
@@ -224,8 +293,42 @@ internal sealed class ChatWindow : Form
         // [왜] 여기서 바로 서버에 나가기를 보내지 않는다. 확인 창을 띄우고 전송하는 일은 메인 창이 한다.
         _leaveButton.Click += (_, _) => LeaveRequested?.Invoke(this);
         _header.Controls.Add(_leaveButton);
+
+        // [초대] 버튼: [나가기]와 같은 모양, 그 왼쪽에
+        _inviteButton.Text = "초대";
+        _inviteButton.FlatStyle = FlatStyle.Flat;
+        _inviteButton.FlatAppearance.BorderColor = Color.White;
+        _inviteButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(80, 150, 240);
+        _inviteButton.BackColor = Color.Transparent;
+        _inviteButton.ForeColor = Color.White;
+        _inviteButton.Font = Theme.SmallBold;
+        _inviteButton.AutoSize = true;
+        _inviteButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _inviteButton.Visible = false;
+        _inviteButton.Cursor = Cursors.Hand;
+        _inviteButton.Click += (_, _) => InviteRequested?.Invoke(this);
+        _toolTip.SetToolTip(_inviteButton, "동료를 이 방에 초대 (비공개 방은 초대로만 들어올 수 있습니다)");
+        _header.Controls.Add(_inviteButton);
+
+        // [삭제] 버튼: 빨간 테두리 (모든 멤버가 빠지는 위험한 동작이라 눈에 띄게)
+        _deleteButton.Text = "방 삭제";
+        _deleteButton.FlatStyle = FlatStyle.Flat;
+        _deleteButton.FlatAppearance.BorderColor = Color.FromArgb(254, 202, 202);
+        _deleteButton.FlatAppearance.MouseOverBackColor = Color.FromArgb(220, 38, 38);
+        _deleteButton.BackColor = Color.Transparent;
+        _deleteButton.ForeColor = Color.White;
+        _deleteButton.Font = Theme.SmallBold;
+        _deleteButton.AutoSize = true;
+        _deleteButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        _deleteButton.Visible = false;
+        _deleteButton.Cursor = Cursors.Hand;
+        _deleteButton.Click += (_, _) => DeleteRoomRequested?.Invoke(this);
+        _toolTip.SetToolTip(_deleteButton, "방을 없앱니다. 모든 멤버가 빠지고 목록에서 사라집니다 (방장·관리자만)");
+        _header.Controls.Add(_deleteButton);
         // [왜] AutoSize 버튼은 실제 너비가 나중에 정해지므로, 머리 크기가 바뀔 때마다 위치를 다시 계산한다.
         _header.Resize += (_, _) => PlaceLeaveButton();
+        // [주의] AutoSize 버튼의 실제 크기는 창이 처음 화면에 뜰 때 정해진다. 그때 한 번 더 자리를 잡는다.
+        Shown += (_, _) => PlaceLeaveButton();
 
         // 대화
         _view.Dock = DockStyle.Fill;   // 머리와 입력 영역을 뺀 나머지 전부
@@ -233,7 +336,7 @@ internal sealed class ChatWindow : Form
         // [+] 버튼 → 카카오톡처럼 사진 / 동영상 / 파일을 따로 고르는 메뉴
         // [왜] 처음에는 📎 이모지를 썼는데 PC 글꼴에 따라 네모로 깨져 보여서, 어느 PC에서나 보이는 "+" 글자로 바꿨다.
         _attachButton.Text = "+";
-        _attachButton.Font = new Font(Theme.Body.FontFamily, 17F, FontStyle.Bold);
+        _attachButton.Font = AttachFont;
         _attachButton.FlatStyle = FlatStyle.Flat;
         _attachButton.FlatAppearance.BorderSize = 0;   // 테두리 없는 아이콘 버튼처럼
         _attachButton.ForeColor = Theme.SubText;
@@ -242,12 +345,12 @@ internal sealed class ChatWindow : Form
         _attachButton.Cursor = Cursors.Hand;
         _attachButton.Click += (_, _) => ShowAttachMenu();
         // [개념] ToolTip: 마우스를 올려 두면 뜨는 작은 설명. 컨트롤마다 SetToolTip으로 문구를 지정한다.
-        new ToolTip().SetToolTip(_attachButton, "사진·동영상·파일 보내기 (최대 3GB, 끌어다 놓기·Ctrl+V도 가능)");
+        _toolTip.SetToolTip(_attachButton, "사진·동영상·파일 보내기 (최대 3GB, 끌어다 놓기·Ctrl+V도 가능)");
         BuildAttachMenu();
 
         // 입력 영역
         _emoticonButton.Text = "☺";
-        _emoticonButton.Font = new Font(Theme.Body.FontFamily, 14F);
+        _emoticonButton.Font = EmoticonFont;
         _emoticonButton.FlatStyle = FlatStyle.Flat;
         _emoticonButton.FlatAppearance.BorderSize = 0;
         _emoticonButton.ForeColor = Theme.SubText;
@@ -270,6 +373,20 @@ internal sealed class ChatWindow : Form
         _input.MaxLength = 500;
         _input.Dock = DockStyle.Fill;
         _input.KeyDown += OnInputKeyDown;
+        _input.TextChanged += (_, _) =>
+        {
+            UpdateMentionList();
+            _typingTimer.Stop();
+            bool typing = _input.TextLength > 0 && _input.Enabled;
+            TypingActivity?.Invoke(this, typing);
+            if (typing) _typingTimer.Start();
+        };
+        _mentionList.Visible = false;
+        _mentionList.IntegralHeight = true;
+        _mentionList.BorderStyle = BorderStyle.FixedSingle;
+        _mentionList.Font = Theme.Body;
+        _mentionList.MaximumSize = new Size(S(260), S(220));
+        _mentionList.Click += (_, _) => ApplyMentionSelection();
 
         _sendButton.Text = "전송";
         _sendButton.FlatStyle = FlatStyle.Flat;
@@ -303,19 +420,82 @@ internal sealed class ChatWindow : Form
             e.Graphics.DrawLine(pen, 0, 0, inputArea.Width, 0);
         };
 
-        // 창에 붙이는 순서: 대화(Fill) → 입력(Bottom) → 머리(Top)
+        _typingLabel.Dock = DockStyle.Bottom;
+        _typingLabel.Height = S(22);
+        _typingLabel.Padding = new Padding(S(12), 0, S(12), 0);
+        _typingLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _typingLabel.ForeColor = Theme.SubText;
+        _typingLabel.Font = Theme.Small;
+        _typingLabel.Visible = false;
+
+        // 답장 막대: 입력 영역 바로 위 "↳ 홍길동에게 답장: 원문…  ✕"
+        _replyBar.Dock = DockStyle.Bottom;
+        _replyBar.Height = S(32);
+        _replyBar.BackColor = Theme.Selected;
+        _replyBar.Padding = new Padding(S(12), 0, S(6), 0);
+        _replyBar.Visible = false;
+        _replyLabel.Dock = DockStyle.Fill;
+        _replyLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _replyLabel.AutoEllipsis = true;
+        _replyLabel.UseMnemonic = false; // & 문자를 단축키로 해석하지 않게
+        _replyLabel.Font = Theme.Small;
+        _replyLabel.ForeColor = Theme.Text;
+        var cancelReply = new Button
+        {
+            Text = "✕", Dock = DockStyle.Right, Width = S(30), FlatStyle = FlatStyle.Flat,
+            ForeColor = Theme.SubText, Cursor = Cursors.Hand, TabStop = false,
+        };
+        cancelReply.FlatAppearance.BorderSize = 0;
+        cancelReply.Click += (_, _) => CancelReply();
+        _toolTip.SetToolTip(cancelReply, "답장 취소 (Esc)");
+        _replyBar.Controls.Add(_replyLabel);
+        _replyBar.Controls.Add(cancelReply);
+        _replyLabel.BringToFront();
+
+        // 창에 붙이는 순서: 대화(Fill) → 답장 막대 → 입력(Bottom) → 머리(Top)
         BuildSearchBar();
         Controls.Add(_view);
+        Controls.Add(_typingLabel);
+        Controls.Add(_replyBar); // 입력 영역보다 먼저 Add → 입력 영역이 맨 아래, 답장 막대는 그 위
         Controls.Add(inputArea);
         Controls.Add(_searchBar); // 머리(_header)보다 먼저 Add → 머리 바로 아래에 붙는다 (Dock은 나중에 Add한 것이 먼저 가장자리를 차지)
+        _pinnedNotice.Dock = DockStyle.Top;
+        _pinnedNotice.Height = S(34);
+        _pinnedNotice.Padding = new Padding(S(12), 0, S(12), 0);
+        _pinnedNotice.TextAlign = ContentAlignment.MiddleLeft;
+        _pinnedNotice.AutoEllipsis = true;
+        _pinnedNotice.BackColor = Color.FromArgb(255, 247, 214);
+        _pinnedNotice.ForeColor = Theme.Text;
+        _pinnedNotice.Font = Theme.SmallBold;
+        _pinnedNotice.Visible = false;
+        Controls.Add(_pinnedNotice);
         Controls.Add(_header);
         // [왜] Fill인 _view를 맨 앞으로 → 머리(Top)와 입력(Bottom)이 먼저 자리를 잡고 _view가 그 사이를 채운다.
         _view.BringToFront();
+        Controls.Add(_mentionList);
+        _mentionList.BringToFront();
     }
 
-    /// <summary>[나가기] 버튼을 머리 오른쪽 끝, 세로 가운데에 놓는다.</summary>
+    /// <summary>[나가기] 버튼을 머리 오른쪽 끝, [초대]는 그 왼쪽(나가기가 없으면 오른쪽 끝)에 놓는다. 세로 가운데.</summary>
+    // [주의] Control.Visible은 창이 아직 화면에 뜨기 전에는 true로 정해 놔도 false를 돌려준다(부모가 안 보이므로).
+    //        그래서 "보여 줄지"는 따로 기억해 두고 그 값으로 자리를 계산한다. (이걸 안 해서 버튼이 겹쳐 보였다)
+    private bool _showLeave, _showInvite, _showDelete;
+
     private void PlaceLeaveButton()
-        => _leaveButton.Location = new Point(_header.Width - _leaveButton.Width - S(14), (_header.Height - _leaveButton.Height) / 2);
+    {
+        int right = _header.Width - S(14);
+        if (_showLeave)
+        {
+            _leaveButton.Location = new Point(right - _leaveButton.Width, (_header.Height - _leaveButton.Height) / 2);
+            right = _leaveButton.Left - S(6);
+        }
+        if (_showDelete)
+        {
+            _deleteButton.Location = new Point(right - _deleteButton.Width, (_header.Height - _deleteButton.Height) / 2);
+            right = _deleteButton.Left - S(6);
+        }
+        _inviteButton.Location = new Point(right - _inviteButton.Width, (_header.Height - _inviteButton.Height) / 2);
+    }
 
     /// <summary>
     /// 머리 그리기 (Paint 이벤트). 그라데이션 배경은 GradientPanel이 먼저 그리고, 그 위에 아바타·제목·부제목을 그린다.
@@ -346,7 +526,9 @@ internal sealed class ChatWindow : Form
 
         // 글자 영역: 아바타 오른쪽부터 [나가기] 버튼 왼쪽까지 (버튼이 없으면 머리 끝까지)
         int x = avatar.Right + S(12);
-        int right = _leaveButton.Visible ? _leaveButton.Left - S(8) : _header.Width - S(12);
+        int right = _showInvite ? _inviteButton.Left - S(8)
+                  : _showDelete ? _deleteButton.Left - S(8)
+                  : _showLeave ? _leaveButton.Left - S(8) : _header.Width - S(12);
         // [개념] TextFormatFlags: SingleLine(한 줄), EndEllipsis(넘치면 끝을 "..."로), NoPrefix(& 문자를 단축키 밑줄로 해석하지 않음)
         // [주의] NoPrefix가 없으면 방 이름에 "A&B"가 있을 때 &가 사라지고 B에 밑줄이 그어진다.
         var flags = TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix;
@@ -368,37 +550,143 @@ internal sealed class ChatWindow : Form
         _header.Invalidate(); // [개념] Invalidate: "다시 그려 달라" 요청 → 곧 PaintHeader가 새 값으로 실행된다.
     }
 
+    public void SetPinnedNotice(string? text)
+    {
+        string value = text?.Trim() ?? "";
+        _pinnedNotice.Text = value.Length == 0 ? "" : "📌 " + value;
+        _pinnedNotice.Visible = value.Length > 0;
+    }
+
+    public void SetTypingIndicator(string employeeNo, string displayName, bool isTyping)
+    {
+        if (isTyping) _typingUntil[employeeNo] = (displayName, DateTime.Now.AddSeconds(4));
+        else _typingUntil.Remove(employeeNo);
+        RefreshTypingLabel();
+        if (_typingUntil.Count > 0 && !_typingExpiryTimer.Enabled) _typingExpiryTimer.Start();
+    }
+
+    private void RefreshTypingLabel()
+    {
+        DateTime now = DateTime.Now;
+        foreach (string key in _typingUntil.Where(x => x.Value.Until <= now).Select(x => x.Key).ToList()) _typingUntil.Remove(key);
+        if (_typingUntil.Count == 0)
+        {
+            _typingExpiryTimer.Stop();
+            _typingLabel.Visible = false;
+            return;
+        }
+        _typingLabel.Text = string.Join(", ", _typingUntil.Values.Select(x => x.Name).Take(3)) + " 입력 중...";
+        _typingLabel.Visible = true;
+    }
+
     /// <summary>[나가기] 버튼 표시 여부. 기본 방("전체 채팅")과 1:1 창에서는 숨긴다.</summary>
     // [개념] [DesignerSerializationVisibility(Hidden)]: Visual Studio 디자이너가 이 속성 값을 코드로 저장하지 않게 한다.
     //        public 속성을 가진 Form은 디자이너/분석기(WFO1000 경고)가 "직렬화할 속성인가?"를 묻기 때문에 명시해 둔다.
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public bool ShowLeaveButton
     {
-        get => _leaveButton.Visible;
+        get => _showLeave;
         set
         {
+            _showLeave = value;
             _leaveButton.Visible = value;
             PlaceLeaveButton();
             _header.Invalidate(); // 제목이 쓸 수 있는 너비가 달라지므로 다시 그림
         }
     }
 
-    /// <summary>1:1 상대의 접속 상태. 오프라인이면 입력을 막는다.</summary>
+    /// <summary>방 이름 부분을 눌렀을 때 뜨는 메뉴 (채팅방만). 창이 닫힐 때 함께 정리된다.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public ContextMenuStrip? HeaderMenu
+    {
+        get => _headerMenu;
+        set
+        {
+            _headerMenu = value;
+            _header.Cursor = value is null ? Cursors.Default : Cursors.Hand;
+            _toolTip.SetToolTip(_header, value is null ? null : "눌러서 멤버 보기 · 방장 넘기기");
+        }
+    }
+    private ContextMenuStrip? _headerMenu;
+
+    public void RequestRoomFiles() => RoomFilesRequested?.Invoke(this);
+
+    /// <summary>[방 삭제] 버튼 표시 여부 (방장·관리자만).</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool ShowDeleteButton
+    {
+        get => _showDelete;
+        set
+        {
+            _showDelete = value;
+            _deleteButton.Visible = value;
+            PlaceLeaveButton();
+            _header.Invalidate();
+        }
+    }
+
+    /// <summary>[초대] 버튼 표시 여부 (기본 방이 아닌 채팅방만).</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool ShowInviteButton
+    {
+        get => _showInvite;
+        set
+        {
+            _showInvite = value;
+            _inviteButton.Visible = value;
+            PlaceLeaveButton();
+            _header.Invalidate();
+        }
+    }
+
+    /// <summary>
+    /// 1:1 상대의 접속 상태 (머리의 초록/회색 점).
+    /// [왜] 예전에는 상대가 오프라인이면 입력을 막았다. 이제 서버가 1:1 메시지·파일을 저장해 두었다가
+    ///      상대가 접속하면 알려 주므로(카카오톡처럼) 입력은 연결 상태(SetInputEnabled)로만 정한다.
+    /// </summary>
     public void SetOnline(bool online)
     {
-        // [왜] 서버는 접속 중인 사람에게만 귓속말·파일을 전달할 수 있다(오프라인 메시지 미지원).
-        //      보내 봐야 오류가 나므로 처음부터 입력을 막아 사용자가 헷갈리지 않게 한다.
-        // [주의] 입력 상태는 값이 같아도 매번 다시 맞춘다. 재접속하는 동안 SetInputEnabled(false)로 막아 둔 창이
-        //        다시 연결된 뒤 "상대 온라인(이전과 같은 값)"을 받았을 때도 입력이 풀려야 하기 때문이다.
-        SetInputEnabled(online);
         if (_online == online) return; // 머리 부분(접속 점)은 값이 바뀔 때만 다시 그린다
         _online = online;
         _header.Invalidate();
     }
 
+    /// <summary>말풍선 화면 설정: 내 사원번호(내 공감 강조)와 삭제 가능 여부 판단 함수.</summary>
+    public void SetViewOptions(string myKey, Func<ChatItem, bool> canDelete, Func<ChatItem, bool> canEdit)
+    {
+        _view.MyKey = myKey;
+        _view.CanDelete = canDelete;
+        _view.CanEdit = canEdit;
+    }
+
+    // ───────── 답장 ─────────
+
+    /// <summary>답장 시작: 입력칸 위에 "↳ 누구에게 답장" 막대를 띄운다. 보내면 그 메시지에 대한 답장이 된다.</summary>
+    public void BeginReply(ChatItem item)
+    {
+        if (!item.CanInteract) return;
+        _replyTo = item;
+        string who = item.Kind == ChatItemKind.Mine ? "나" : item.Sender;
+        string preview = item.File is not null ? item.Text : item.Text.ReplaceLineEndings(" ");
+        _replyLabel.Text = $"↳ {who}에게 답장: {preview}";
+        _replyBar.Visible = true;
+        _input.Focus();
+    }
+
+    private void CancelReply()
+    {
+        _replyTo = null;
+        _replyBar.Visible = false;
+    }
+
     /// <summary>입력칸과 버튼들을 한꺼번에 켜고/끈다 (연결 끊김, 상대 오프라인).</summary>
     public void SetInputEnabled(bool enabled)
     {
+        if (!enabled)
+        {
+            _typingTimer.Stop();
+            TypingActivity?.Invoke(this, false);
+        }
         _input.Enabled = enabled;
         _sendButton.Enabled = enabled;
         _emoticonButton.Enabled = enabled;
@@ -442,7 +730,36 @@ internal sealed class ChatWindow : Form
     private void OnItemChanged(ChatItem item) => _view.RefreshItem(item);
 
     /// <summary>지난 대화가 앞에 들어왔다 → 전체를 다시 배치해서 그린다.</summary>
-    private void OnReloaded() => _view.SetItems(Conversation.Items);
+    private void OnReloaded()
+    {
+        _view.SetItems(Conversation.Items, preserveViewport: Conversation.LoadingOlderHistory);
+        TryFocusPending(); // 지난 대화를 기다리던 검색 결과 메시지가 이제 들어왔을 수 있다
+    }
+
+    // ───────── 특정 메시지로 이동 (전체 검색 결과) ─────────
+
+    private bool _shown;
+    private long _focusMessageId;
+
+    /// <summary>그 메시지로 스크롤하고 강조한다. 아직 지난 대화가 오지 않았으면 오는 대로 이동한다.</summary>
+    public void FocusMessage(long messageId)
+    {
+        _focusMessageId = messageId;
+        if (_shown) TryFocusPending();
+    }
+
+    private void TryFocusPending()
+    {
+        if (_focusMessageId <= 0 || !_shown) return;
+        if (Conversation.FindMessage(_focusMessageId) is { } item && Conversation.Items.Contains(item))
+        {
+            _focusMessageId = 0;
+            _view.FocusItem(item);
+        }
+    }
+
+    /// <summary>읽음 숫자가 바뀌었다 → 다시 그리기만.</summary>
+    private void OnReadStateChanged() => _view.RefreshAll();
 
     /// <summary>
     /// 입력칸 키 처리: Ctrl+V(파일·이미지 붙여넣기), Enter(전송), Shift+Enter(줄바꿈).
@@ -472,7 +789,7 @@ internal sealed class ChatWindow : Form
             };
             b.FlatAppearance.BorderSize = 0;
             b.Click += (_, _) => click();
-            new ToolTip().SetToolTip(b, tip);
+            _toolTip.SetToolTip(b, tip);
             return b;
         }
 
@@ -555,12 +872,40 @@ internal sealed class ChatWindow : Form
 
     private void OnInputKeyDown(object? sender, KeyEventArgs e)
     {
+        if (_mentionList.Visible)
+        {
+            if (e.KeyCode is Keys.Down or Keys.Up)
+            {
+                e.SuppressKeyPress = true;
+                int step = e.KeyCode == Keys.Down ? 1 : -1;
+                _mentionList.SelectedIndex = Math.Clamp(_mentionList.SelectedIndex + step, 0, _mentionList.Items.Count - 1);
+                return;
+            }
+            if (e.KeyCode is Keys.Enter or Keys.Tab)
+            {
+                e.SuppressKeyPress = true;
+                ApplyMentionSelection();
+                return;
+            }
+            if (e.KeyCode == Keys.Escape)
+            {
+                e.SuppressKeyPress = true;
+                _mentionList.Visible = false;
+                return;
+            }
+        }
         // [개념] KeyData = 누른 키 + 함께 누른 Ctrl/Shift/Alt 조합. (Keys.Control | Keys.V) = Ctrl+V.
         // [개념] && 단락 평가: 앞이 false면 뒤(TryPasteFiles)는 아예 실행되지 않는다 → Ctrl+V일 때만 클립보드를 확인.
         if (e.KeyData == (Keys.Control | Keys.V) && TryPasteFiles())
         {
             e.SuppressKeyPress = true; // 파일·이미지를 보냈으면 글자로 붙여 넣지 않는다
             // [개념] SuppressKeyPress = true: 이 키 입력을 텍스트 상자에 전달하지 않는다(기본 동작 취소).
+            return;
+        }
+        if (e.KeyCode == Keys.Escape && _replyTo is not null)
+        {
+            e.SuppressKeyPress = true;
+            CancelReply();
             return;
         }
         if (e.KeyCode == Keys.Enter && !e.Shift)
@@ -571,15 +916,95 @@ internal sealed class ChatWindow : Form
         }
     }
 
+    /// <summary>방 멤버로 @멘션 자동완성 후보를 갱신한다.</summary>
+    public void SetMentionCandidates(IEnumerable<(string EmployeeNo, string DisplayName)> people, string ownEmployeeNo)
+    {
+        _mentionCandidates = people.Where(p => p.EmployeeNo != ownEmployeeNo)
+            .DistinctBy(p => p.EmployeeNo).OrderBy(p => p.DisplayName)
+            .Select(p => new MentionCandidate(p.EmployeeNo, p.DisplayName)).ToList();
+        UpdateMentionList();
+    }
+
+    private void UpdateMentionList()
+    {
+        int caret = _input.SelectionStart;
+        string before = _input.Text[..Math.Clamp(caret, 0, _input.Text.Length)];
+        int at = before.LastIndexOf('@');
+        if (at < 0 || _mentionCandidates.Count == 0)
+        {
+            _mentionList.Visible = false;
+            return;
+        }
+        string query = before[(at + 1)..];
+        if (query.Any(char.IsWhiteSpace) || query.Length > 30)
+        {
+            _mentionList.Visible = false;
+            return;
+        }
+        _mentionStart = at;
+        _mentionMatches.Clear();
+        _mentionMatches.AddRange(_mentionCandidates.Where(p => p.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || p.EmployeeNo.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(8));
+        _mentionList.Items.Clear();
+        foreach (MentionCandidate person in _mentionMatches) _mentionList.Items.Add($"{person.DisplayName}  ({person.EmployeeNo})");
+        if (_mentionMatches.Count == 0)
+        {
+            _mentionList.Visible = false;
+            return;
+        }
+        _mentionList.SelectedIndex = 0;
+        int height = Math.Min(S(220), _mentionList.PreferredHeight * _mentionMatches.Count);
+        Point inputTop = PointToClient(_input.PointToScreen(Point.Empty));
+        _mentionList.Size = new Size(S(260), Math.Max(S(42), height));
+        _mentionList.Location = new Point(Math.Max(0, inputTop.X), Math.Max(S(70), inputTop.Y - _mentionList.Height));
+        _mentionList.Visible = true;
+        _mentionList.BringToFront();
+    }
+
+    private void ApplyMentionSelection()
+    {
+        int index = _mentionList.SelectedIndex;
+        if (index < 0 || index >= _mentionMatches.Count || _mentionStart < 0) return;
+        string name = _mentionMatches[index].DisplayName;
+        int caret = _input.SelectionStart;
+        int end = caret;
+        while (end < _input.Text.Length && !char.IsWhiteSpace(_input.Text[end])) end++;
+        string mention = "@" + name + " ";
+        _input.Text = _input.Text[.._mentionStart] + mention + _input.Text[end..];
+        _input.SelectionStart = _mentionStart + mention.Length;
+        _mentionList.Visible = false;
+        _input.Focus();
+    }
+
     /// <summary>입력칸의 글을 메인 창에 넘겨 보내게 하고, 입력칸을 비운다.</summary>
     private void Send()
     {
         string text = _input.Text.Trim(); // 앞뒤 공백·줄바꿈 제거 (빈 줄만 있는 메시지 방지)
         if (text.Length == 0 || !_input.Enabled) return;
         // [왜] 실제 전송(패킷 만들기, 방 번호/상대 지정)은 메인 창이 한다. 이 창은 "보내 달라"고만 알린다.
-        SendRequested?.Invoke(this, text);
+        // 답장할 메시지가 그사이 지워졌으면 보통 메시지로 보낸다
+        long? replyId = _replyTo is { Deleted: false } r ? r.MessageId : null;
+        SendRequested?.Invoke(this, text, replyId);
         _input.Clear();
+        CancelReply();
         _input.Focus();
+    }
+
+    // [주의] 메뉴(ContextMenuStrip)와 툴팁은 컨트롤 트리에 들어 있지 않아 창이 닫혀도 자동으로 해제되지 않는다.
+    //        창을 열고 닫을 때마다 윈도우 핸들(USER/GDI 객체)이 쌓이지 않게 직접 정리한다.
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _toolTip.Dispose();
+            _typingTimer.Dispose();
+            _typingExpiryTimer.Dispose();
+            _headerMenu?.Dispose();
+            _emoticonMenu.Dispose();
+            foreach (ToolStripItem item in _attachMenu.Items) item.Image?.Dispose(); // 코드로 그린 메뉴 아이콘
+            _attachMenu.Dispose();
+        }
+        base.Dispose(disposing);
     }
 
     // ───────── 파일 보내기 ─────────

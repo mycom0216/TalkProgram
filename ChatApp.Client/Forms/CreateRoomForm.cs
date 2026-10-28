@@ -10,7 +10,7 @@ namespace ChatApp.Client.Forms;
 // [왜] 화면(입력)과 통신(전송)을 분리하면 이 창은 서버를 몰라도 되어 단순해지고, 재사용·테스트가 쉽다.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// <summary>방 만들기 창. 확인을 누르면 DialogResult.OK, RoomName·MaxUsers에 입력값.</summary>
+/// <summary>방 만들기 창. 확인을 누르면 DialogResult.OK, RoomName·MaxUsers·IsPrivate에 입력값.</summary>
 public sealed class CreateRoomForm : Form
 {
     // [왜] 최대 글자 수·인원 범위를 Common의 CreateRoomRequest 상수에서 가져온다.
@@ -24,12 +24,15 @@ public sealed class CreateRoomForm : Form
         Maximum = CreateRoomRequest.MaxUsersLimit,
         Value = 10,
     };
+    // 비공개 방: 방 목록에 보이지 않고, 멤버가 초대한 사람만 들어올 수 있다 (팀 방, 프로젝트 방 등)
+    private readonly CheckBox _private = new() { Text = "비공개 방 (초대한 사람만 참여, 목록에 안 보임)", AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
     private readonly Label _status = new() { AutoSize = true, ForeColor = UiHelper.Danger, Margin = new Padding(0, 8, 0, 0) };
 
     // [개념] => 로 만든 읽기 전용 속성: 읽을 때마다 현재 입력값을 계산해서 돌려준다.
     public string RoomName => _name.Text.Trim();
     // NumericUpDown.Value는 decimal 형식이라 int로 바꿔서 돌려준다.
     public int MaxUsers => (int)_maxUsers.Value;
+    public bool IsPrivate => _private.Checked;
 
     public CreateRoomForm()
     {
@@ -53,6 +56,7 @@ public sealed class CreateRoomForm : Form
         var table = UiHelper.CreateFormTable();
         UiHelper.AddFieldRow(table, "방 이름", _name, 220);
         UiHelper.AddFieldRow(table, "최대 인원", _maxUsers, 80);
+        UiHelper.AddSpanRow(table, _private);
         UiHelper.AddSpanRow(table, UiHelper.CreateButtonRow(cancel, create));
         UiHelper.AddSpanRow(table, _status);
         Controls.Add(table);

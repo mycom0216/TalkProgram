@@ -32,6 +32,7 @@ public sealed class AdminForm : Form
     private readonly ComboBox _auditAction = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
     private readonly ComboBox _auditLimit = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 70 };
     private readonly ListView _audit = CreateList();
+    private readonly Label _statsSummary = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = UiHelper.BaseFont, Padding = new Padding(24), Text = "새로고침을 눌러 통계를 불러오세요." };
 
     private readonly Label _status = new() { Dock = DockStyle.Bottom, Height = 26, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0) };
 
@@ -54,13 +55,35 @@ public sealed class AdminForm : Form
         var tabs = new TabControl { Dock = DockStyle.Fill };
         tabs.TabPages.Add(BuildUsersTab());
         tabs.TabPages.Add(BuildAuditTab());
-        tabs.SelectedIndexChanged += (_, _) => { if (tabs.SelectedIndex == 1 && _audit.Items.Count == 0) RequestAudit(); };
+        tabs.TabPages.Add(BuildStatsTab());
+        tabs.SelectedIndexChanged += (_, _) =>
+        {
+            if (tabs.SelectedIndex == 1 && _audit.Items.Count == 0) RequestAudit();
+            else if (tabs.SelectedIndex == 2) RequestStats();
+        };
         Controls.Add(tabs);
         Controls.Add(_status);
 
         _client.PacketReceived += OnPacketReceived;
         FormClosed += (_, _) => _client.PacketReceived -= OnPacketReceived;
         Shown += (_, _) => RequestUsers();
+    }
+
+    private TabPage BuildStatsTab()
+    {
+        var page = new TabPage("통계") { BackColor = Color.White };
+        var refresh = UiHelper.CreateButton("통계 새로고침");
+        refresh.Click += (_, _) => RequestStats();
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8) };
+        bar.Controls.Add(refresh);
+        page.Controls.Add(_statsSummary);
+        page.Controls.Add(bar);
+        return page;
+    }
+
+    private void RequestStats()
+    {
+        if (_client.Send(Packet.Create(PacketType.AdminStatsReq))) ShowStatus("통계를 불러오는 중...", error: false);
     }
 
     /// <summary>승인 대기 목록을 바로 보여 준다 (새 가입 신청 알림을 눌렀을 때).</summary>
@@ -105,9 +128,12 @@ public sealed class AdminForm : Form
         top.Controls.Add(refresh);
         top.Controls.Add(_userCount);
 
-        foreach (var (title, width) in new[] { ("사원번호", 90), ("이름", 80), ("직급", 60), ("부서", 100), ("이메일", 190),
-                                               ("상태", 80), ("권한", 60), ("접속", 50), ("잠금", 60), ("가입일", 90), ("마지막 로그인", 130) })
+        // 이메일(4번 칸)은 고정 너비 대신 "남는 폭을 모두" 쓴다 → 창 크기와 관계없이 마지막 칸까지 한 화면에 들어온다
+        foreach (var (title, width) in new[] { ("사원번호", 80), ("이름", 70), ("직급", 55), ("부서", 90), ("이메일", 160),
+                                               ("상태", 70), ("권한", 50), ("접속", 40), ("잠금", 45), ("가입일", 80), ("마지막 로그인", 110) })
             _users.Columns.Add(title, LogicalToDeviceUnits(width));
+        _users.Columns[7].TextAlign = HorizontalAlignment.Center; // 접속 ●
+        StretchColumn(_users, 4);
         _users.SelectedIndexChanged += (_, _) => UpdateActionButtons();
 
         // 동작 버튼들 (선택한 회원 상태에 따라 켜고 끈다)
@@ -128,6 +154,28 @@ public sealed class AdminForm : Form
         page.Controls.Add(top);
         page.Controls.Add(_actions);
         return page;
+    }
+
+    /// <summary>
+    /// 목록의 한 칸이 "남는 폭"을 모두 쓰게 한다. 창 크기가 바뀔 때마다 다시 계산한다.
+    /// [왜] 칸 너비를 모두 고정하면 창이 좁을 때 오른쪽 칸(마지막 로그인)이 잘려 가로 스크롤이 생긴다.
+    ///      내용 길이가 들쭉날쭉한 칸(이메일, 감사 로그 내용) 하나만 늘었다 줄었다 하게 하면 나머지 칸은 항상 보인다.
+    /// </summary>
+    private void StretchColumn(ListView list, int index)
+    {
+        void Fit()
+        {
+            int others = 0;
+            for (int i = 0; i < list.Columns.Count; i++)
+                if (i != index) others += list.Columns[i].Width;
+            // ClientSize는 세로 스크롤바를 뺀 실제 안쪽 폭. 4px 여유를 둬야 가로 스크롤바가 생기지 않는다.
+            int width = list.ClientSize.Width - others - LogicalToDeviceUnits(4);
+            list.Columns[index].Width = Math.Max(LogicalToDeviceUnits(120), width); // 너무 좁아지면 120에서 멈춘다
+        }
+        list.ClientSizeChanged += (_, _) => Fit();
+        // 사용자가 다른 칸 너비를 끌어서 바꾼 경우에도 다시 맞춘다
+        list.ColumnWidthChanged += (_, e) => { if (e.ColumnIndex != index) Fit(); };
+        Fit();
     }
 
     private void AddAction(string text, AdminActionType type)
@@ -164,6 +212,7 @@ public sealed class AdminForm : Form
 
         foreach (var (title, width) in new[] { ("시각", 140), ("동작", 120), ("한 사람", 90), ("대상", 90), ("내용", 330), ("IP", 110) })
             _audit.Columns.Add(title, LogicalToDeviceUnits(width));
+        StretchColumn(_audit, 4); // 내용 칸이 남는 폭을 쓴다
 
         page.Controls.Add(_audit);
         page.Controls.Add(top);
@@ -232,7 +281,7 @@ public sealed class AdminForm : Form
     // [스레드] 수신 스레드 → UI 스레드로 넘긴다.
     private void OnPacketReceived(Packet packet)
     {
-        if (packet.Type is PacketType.AdminUserList or PacketType.AdminActionRes or PacketType.AdminAudit or PacketType.AdminNotify)
+        if (packet.Type is PacketType.AdminUserList or PacketType.AdminActionRes or PacketType.AdminAudit or PacketType.AdminNotify or PacketType.AdminStats)
             UiHelper.RunOnUi(this, () => HandlePacket(packet));
     }
 
@@ -262,6 +311,16 @@ public sealed class AdminForm : Form
                 ShowAudit(packet.GetData<List<AuditEntry>>() ?? []);
                 break;
 
+            case PacketType.AdminStats:
+                if (packet.GetData<AdminStats>() is { } stats)
+                {
+                    _statsSummary.Text = $"기준 시각(UTC): {stats.CapturedAtUtc:yyyy-MM-dd HH:mm:ss}\n\n" +
+                        $"접속 중: {stats.OnlineUsers:N0}명\n사용 계정: {stats.ActiveUsers:N0}명 · 승인 대기: {stats.PendingUsers:N0}명 · 정지: {stats.SuspendedUsers:N0}명\n\n" +
+                        $"열린 방: {stats.OpenRooms:N0}개\n메시지: {stats.Messages:N0}개\n파일: {stats.Files:N0}개 · {FileRules.FormatSize(stats.FileBytes)}";
+                    ShowStatus("관리 통계를 갱신했습니다.", error: false);
+                }
+                break;
+
             case PacketType.AdminNotify:
                 RequestUsers(); // 새 가입 신청 등 → 목록 새로 고침
                 break;
@@ -288,7 +347,7 @@ public sealed class AdminForm : Form
                 u.EmployeeNo, u.Name, u.Position, u.Department, u.Email,
                 AdminUserInfo.StatusText(u.Status), u.Role == "ADMIN" ? "관리자" : "",
                 u.Online ? "●" : "", u.LockMinutesLeft > 0 ? $"{u.LockMinutesLeft}분" : "",
-                u.CreatedAt.ToString("yyyy-MM-dd"), u.LastLoginAt?.ToString("yyyy-MM-dd HH:mm") ?? "-",
+                u.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd"), u.LastLoginAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-",
             ]) { Tag = u };
             // 눈에 띄어야 할 줄에 색: 승인 대기 = 파랑, 정지·퇴사 = 회색, 잠김 = 빨강
             if (u.Status == "PENDING") item.ForeColor = Theme.Primary;
@@ -334,7 +393,7 @@ public sealed class AdminForm : Form
         foreach (AuditEntry e in entries)
         {
             var item = new ListViewItem([
-                e.Time.ToString("yyyy-MM-dd HH:mm:ss"), AuditActions.Text(e.Action),
+                e.Time.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"), AuditActions.Text(e.Action),
                 e.ActorNo ?? "-", e.TargetNo ?? "-", e.Detail ?? "", e.ClientIp ?? "",
             ]);
             // 보안상 눈여겨볼 기록은 빨간색
@@ -347,11 +406,32 @@ public sealed class AdminForm : Form
 
     /// <summary>임시 비밀번호를 보여 주고 클립보드에 복사한다.</summary>
     // [왜] 임시 비밀번호는 서버 로그·감사 로그 어디에도 남기지 않는다. 지금 이 화면이 유일하게 보이는 곳이다.
+    /// <summary>
+    /// 60초 뒤 클립보드에 아직 그 임시 비밀번호가 있으면 지운다.
+    /// [왜] 클립보드는 모든 프로그램이 읽을 수 있고, 클립보드 기록(Win+V)에도 남는다. 다른 것을 복사했으면 건드리지 않는다.
+    /// </summary>
+    private static void ClearClipboardLater(string secret)
+    {
+        var timer = new System.Windows.Forms.Timer { Interval = 60_000 };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            timer.Dispose();
+            try
+            {
+                if (Clipboard.ContainsText() && Clipboard.GetText() == secret) Clipboard.Clear();
+            }
+            catch (System.Runtime.InteropServices.ExternalException) { }
+        };
+        timer.Start(); // [주의] 창을 닫아도 타이머는 UI 스레드에서 계속 돈다(그래서 static으로, 창에 묶지 않는다)
+    }
+
     private void ShowTempPassword(string employeeNo, string temp)
     {
         try { Clipboard.SetText(temp); } catch (System.Runtime.InteropServices.ExternalException) { /* 다른 프로그램이 클립보드를 쓰는 중 */ }
+        ClearClipboardLater(temp);
         MessageBox.Show(this,
-            $"{employeeNo}의 임시 비밀번호:\n\n    {temp}\n\n클립보드에 복사했습니다. 본인에게 직접(메신저 밖에서) 전달하세요.\n" +
+            $"{employeeNo}의 임시 비밀번호:\n\n    {temp}\n\n클립보드에 복사했습니다(60초 뒤 자동으로 지웁니다). 본인에게 직접(메신저 밖에서) 전달하세요.\n" +
             "이 창을 닫으면 다시 볼 수 없습니다. 본인은 다음 로그인 때 새 비밀번호로 바꿔야 합니다.",
             "비밀번호 초기화", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }

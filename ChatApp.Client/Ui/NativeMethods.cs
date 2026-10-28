@@ -79,4 +79,10 @@ internal static class NativeMethods
         if (!GetLastInputInfo(ref info)) return TimeSpan.Zero;
         return TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - info.dwTime));
     }
+
+    /// <summary>GetHicon()으로 만든 아이콘 핸들을 돌려준다. 안 하면 프로그램이 끝날 때까지 GDI 핸들이 남는다.</summary>
+    // [개념] Icon.FromHandle은 핸들을 "빌려" 쓸 뿐 소유하지 않아서, Icon.Dispose()로는 핸들이 해제되지 않는다.
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DestroyIcon(IntPtr handle);
 }

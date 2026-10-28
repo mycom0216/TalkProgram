@@ -29,13 +29,20 @@ public sealed class ChatServer
     private readonly ServerLogger _log;
     private readonly PacketHandler _handler;
     private readonly SslStreamCertificateContext? _tls; // null = 평문
+    private readonly ServerConfig _config;
     private Thread? _acceptThread;
 
     // [개념] volatile: 여러 스레드가 읽고 쓰는 bool 값을 CPU 캐시/컴파일러 최적화 때문에 "옛 값"으로 보지 않도록 한다.
     // [스레드] 메인 스레드(Stop)가 false로 쓰고, Accept 스레드가 while 조건에서 읽는다.
     //         lock까지 쓸 필요는 없는 단순 플래그라 volatile로 충분하다.
     private volatile bool _running;
+    private int _stopped; // Stop()이 이미 불렸는지 (1이면 다시 하지 않음)
     private readonly MessageStore _messages;
+    private readonly FileService _files;
+    private readonly RetentionService? _retention;
+
+    /// <summary>보관 기간 정리를 지금 한 번 실행 (서버 콘솔 /cleanup).</summary>
+    public void RunCleanup() => _retention?.RunOnce();
 
     // 하트비트 감시 스레드 (무응답 연결 정리)
     private readonly int _heartbeatTimeoutMs;
@@ -56,18 +63,34 @@ public sealed class ChatServer
     public ChatServer(IPAddress address, int port, AuthService auth, RoomRepository roomRepository,
                       FileRepository fileRepository, MessageRepository messageRepository,
                       UserRepository userRepository, AuditRepository auditRepository, AuditLog audit,
-                      ServerConfig config, ServerLogger log, SslStreamCertificateContext? tls = null)
+                      ServerConfig config, ServerLogger log, SslStreamCertificateContext? tls = null, Db? db = null)
     {
         // [개념] IPAddress.Any(0.0.0.0) = 이 PC의 모든 네트워크 카드(유선/무선/가상)로 들어오는 접속을 받는다.
         _listener = new TcpListener(address, port);
         _log = log;
         _tls = tls;
-        var files = new FileService(Sessions, Rooms, fileRepository, config, log, audit);
-        Admin = new AdminService(userRepository, auditRepository, auth, Sessions, audit, log);
+        _config = config;
+        var files = new FileService(Sessions, Rooms, fileRepository, config, log, audit, userRepository.FindActiveUser);
+        Admin = new AdminService(userRepository, auditRepository, auth, Sessions, audit, log, db);
         // [개념] files.ReadThumbnail처럼 "메서드 이름만" 넘기면 Func<string, byte[]?> 대리자(delegate)로 바뀐다.
         //        MessageStore는 FileService를 몰라도 "경로 → 미리보기 바이트" 함수만 받아서 쓸 수 있다.
         _messages = new MessageStore(messageRepository, files.ReadThumbnail, log); // DB 작업 스레드 시작
-        _handler = new PacketHandler(Sessions, Rooms, auth, roomRepository, files, _messages, Admin, audit, log);
+        _handler = new PacketHandler(Sessions, Rooms, auth, roomRepository, messageRepository, userRepository,
+                                     files, _messages, Admin, audit, config, log);
+        _files = files;
+        // DB에 저장된 단체방과 멤버를 불러온다 (서버를 다시 켜도 방이 그대로)
+        try
+        {
+            List<Room> saved = roomRepository.LoadOpenRooms();
+            Rooms.Load(saved);
+            if (saved.Count > 0) log.Info($"채팅방 {saved.Count}개를 불러왔습니다.");
+        }
+        catch (System.Data.Common.DbException ex)
+        {
+            log.Error($"채팅방을 불러오지 못했습니다(기본 방만 사용): {ex.Message}");
+        }
+        // 보관 기간 정리 (db가 없으면 테스트 등 → 끔)
+        if (db is not null) _retention = new RetentionService(db, files, config, log);
         _heartbeatTimeoutMs = Math.Max(10, config.HeartbeatTimeoutSeconds) * 1000;
     }
 
@@ -90,6 +113,7 @@ public sealed class ChatServer
 
         _heartbeatThread = new Thread(HeartbeatLoop) { IsBackground = true, Name = "Heartbeat" };
         _heartbeatThread.Start();
+        _retention?.Start();
 
         _log.Info($"서버 시작: {_listener.LocalEndpoint} ({(_tls is null ? "평문 - 암호화 안 함" : "TLS 암호화")})");
     }
@@ -118,17 +142,41 @@ public sealed class ChatServer
                 continue;
             }
 
+            // ── 연결 수 제한 (DoS 방어) ──
+            // [왜] 로그인하지 않아도 연결 하나마다 스레드 2개가 생긴다. 제한이 없으면 연결만 수천 개 열어 서버를 마비시킬 수 있다.
+            if (RejectByLimit(client)) continue;
+
             // [개념] NoDelay = true: Nagle 알고리즘 끄기. Nagle은 작은 패킷을 모아서 한 번에 보내려고 잠깐 기다리는데,
             //        채팅처럼 짧은 메시지가 바로 가야 하는 프로그램에서는 지연(최대 수백 ms)이 생기므로 끈다.
             client.NoDelay = true; // 짧은 채팅 메시지를 지연 없이 보냄
 
-            var session = new ClientSession(client, _handler, _tls); // TLS 핸드셰이크는 세션의 수신 스레드가 한다
+            var session = new ClientSession(client, _handler, _tls, // TLS 핸드셰이크는 세션의 수신 스레드가 한다
+                                            Math.Max(1, _config.MaxSendQueueMB) * 1024L * 1024,
+                                            Math.Max(5, _config.SendTimeoutSeconds) * 1000);
             Sessions.Add(session);
             _log.Info($"접속: {session} (현재 {Sessions.ConnectedCount}명)");
             // [주의] 목록에 먼저 넣고(Add) 나서 Start한다. 반대로 하면, 시작하자마자 끊긴 세션이
             //        목록에서 지워진 "뒤에" 목록에 들어가 유령 접속자가 남을 수 있다.
             session.Start(); // 이 세션의 수신 스레드 + 송신 스레드 시작
         }
+    }
+
+    /// <summary>최대 연결 수·IP당 연결 수를 넘으면 바로 끊는다. 끊었으면 true.</summary>
+    // [스레드] Accept 스레드에서만 부른다. 세는 동안 다른 세션이 끊길 수 있지만, 조금 어긋나도 문제없는 "대략적인" 제한이다.
+    private bool RejectByLimit(TcpClient client)
+    {
+        string? reason = null;
+        if (Sessions.ConnectedCount >= _config.MaxConnections)
+            reason = $"최대 연결 수({_config.MaxConnections}) 초과";
+        else if (client.Client.RemoteEndPoint is IPEndPoint ep && !IPAddress.IsLoopback(ep.Address)
+                 && Sessions.GetAllSessions().Count(s => ep.Address.Equals(s.RemoteAddress)) >= _config.MaxConnectionsPerIp)
+            // [왜] 같은 PC(127.0.0.1)는 부하 테스트·개발용이라 제외한다. 회사 NAT 뒤라 여러 사람이 같은 IP로 보일 수 있으니 값은 넉넉히.
+            reason = $"IP당 연결 수({_config.MaxConnectionsPerIp}) 초과";
+
+        if (reason is null) return false;
+        _log.Error($"연결 거부: {client.Client.RemoteEndPoint} - {reason}");
+        try { client.Close(); } catch (Exception ex) when (ex is SocketException or ObjectDisposedException) { }
+        return true;
     }
 
     /// <summary>
@@ -142,15 +190,44 @@ public sealed class ChatServer
     private void HeartbeatLoop()
     {
         // [개념] WaitHandle.WaitOne(5초): 5초 동안 잠들되, Stop()에서 Cancel()하면 즉시 깨어나 true → 루프 종료.
+        int round = 0;
         while (!_stopping.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(5)))
         {
+            // 1분에 한 번: 멈춘 업로드 정리, 오래된 속도 제한 기록 정리
+            if (++round % 12 == 0)
+            {
+                try
+                {
+                    _files.AbortStalled(TimeSpan.FromMinutes(2));
+                    _handler.Maintenance();
+                }
+                catch (Exception ex) { _log.Error($"주기 정리 중 오류: {ex.Message}"); }
+            }
+
+            long loginTimeoutMs = Math.Max(30, _config.LoginTimeoutSeconds) * 1000L;
             foreach (ClientSession session in Sessions.GetAllSessions()) // 스냅샷이라 도는 중에 누가 나가도 안전
             {
-                long silent = session.SilentMilliseconds;
-                if (silent <= _heartbeatTimeoutMs || session.IsClosed) continue;
-
-                _log.Info($"응답 없음 ({silent / 1000}초) → 연결 종료: {session}");
-                session.Close(); // OnDisconnected가 불려 접속자 목록·방에서 빠지고 다른 사람에게 퇴장 알림이 간다
+                // [주의] 이 스레드에서 예외가 새어 나가면 서버 전체가 죽는다. 세션 하나의 문제는 그 세션에서 끝낸다.
+                try
+                {
+                    if (session.IsClosed) continue;
+                    long silent = session.SilentMilliseconds;
+                    if (silent > _heartbeatTimeoutMs)
+                    {
+                        _log.Info($"응답 없음 ({silent / 1000}초) → 연결 종료: {session}");
+                        session.Close(); // OnDisconnected가 불려 접속자 목록·방에서 빠지고 다른 사람에게 퇴장 알림이 간다
+                    }
+                    // [왜] Ping만 보내며 로그인하지 않는 연결은 하트비트로는 안 끊긴다. 로그인 제한 시간을 따로 둔다.
+                    else if (!session.IsLoggedIn && Environment.TickCount64 - session.ConnectedTicks > loginTimeoutMs)
+                    {
+                        _log.Info($"로그인 제한 시간({loginTimeoutMs / 1000}초) 초과 → 연결 종료: {session}");
+                        session.Close();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.Error($"하트비트 점검 중 오류 ({session}): {ex.Message}");
+                }
             }
         }
     }
@@ -158,13 +235,17 @@ public sealed class ChatServer
     /// <summary>서버 종료 (메인 스레드에서 /quit 입력 시). 순서가 중요하다.</summary>
     public void Stop()
     {
+        if (Interlocked.Exchange(ref _stopped, 1) == 1) return; // Ctrl+C와 /quit이 겹쳐도 한 번만
         _running = false;          // ① Accept 루프가 다시 돌지 않게 표시
         _stopping.Cancel();        //    하트비트 감시 스레드도 깨워서 끝낸다
         _handler.StopListBroadcaster();
-        _listener.Stop();         // 블로킹 중인 AcceptTcpClient를 깨운다
-        Sessions.CloseAll();      // ③ 모든 접속 끊기 (각 세션 스레드가 스스로 끝난다)
+        _listener.Stop();         // ② 블로킹 중인 AcceptTcpClient를 깨운다
         // [개념] Join(시간): 그 스레드가 끝날 때까지 최대 2초 기다린다. 무한정 기다리지 않도록 시간 제한을 둔다.
+        // [주의] Accept 스레드가 "완전히 끝난 뒤에" 모든 접속을 끊는다. 순서가 반대면, 끊는 사이 막 받아들인 접속이
+        //        목록에 새로 들어와 정리되지 않고 남을 수 있다.
         _acceptThread?.Join(TimeSpan.FromSeconds(2));
+        Sessions.CloseAll();      // ③ 모든 접속 끊기 (각 세션 스레드가 스스로 끝난다)
+        _retention?.Dispose();
         _messages.Dispose();      // 아직 저장 못 한 대화를 마저 저장하고 DB 작업 스레드 종료
         _log.Info("서버 종료");
     }

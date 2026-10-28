@@ -75,6 +75,8 @@ public sealed class FileService
         public long Received;
         // true = 끝났거나 취소됨. 이후 도착하는 조각은 무시한다. (Lock 안에서만 읽고 쓴다)
         public bool Closed;
+        // 마지막으로 조각을 받은 시각 (멈춘 업로드 정리용)
+        public long LastActivityTicks = Environment.TickCount64;
     }
 
     // [왜] files 테이블은 나중에 추가한 기능이라, 예전 DB에서는 없을 수 있다. 그때 사용자에게 보여 줄 안내 문구.
@@ -85,6 +87,11 @@ public sealed class FileService
     //   일반 Dictionary를 여러 스레드에서 동시에 고치면 내부 구조가 깨져 예외나 무한 루프가 생길 수 있다.
     // [스레드] 여러 사람의 수신 스레드가 각자 자기 파일을 넣고 빼므로 동시 접근이 일어난다. 키 = 파일 ID.
     private readonly ConcurrentDictionary<string, Upload> _uploads = new();
+
+    // 받고 있는 파일들이 앞으로 차지할 디스크 크기 합계 (아직 다 받지 않았어도 미리 "예약"해 둔다)
+    // [왜] 여유 공간이 5GB일 때 3GB 파일 3개가 동시에 들어오면, 각각 확인할 때는 모두 "공간 충분"으로 통과한다.
+    //      예약한 크기까지 빼고 확인해야 실제로 디스크가 가득 차는 일을 막을 수 있다.
+    private long _reservedBytes;
 
     // 진행 중인 내려받기의 "멈춤 신호". 키 = "세션번호:파일ID".
     // [개념] CancellationTokenSource: 다른 스레드에게 "그만해"를 알리는 표준 방법. Cancel()을 부르면
@@ -100,8 +107,13 @@ public sealed class FileService
     private readonly string _root;
     private readonly string _tempDir;
 
-    public FileService(SessionManager sessions, RoomManager rooms, FileRepository repository, ServerConfig config, ServerLogger log, AuditLog audit)
+    /// <summary>사원번호 → 사용 중인 사용자 (접속하지 않은 사람에게 1:1 파일을 보낼 때 확인용). 없으면 접속 중인 사람에게만 보낸다.</summary>
+    private readonly Func<string, UserInfo?>? _findActiveUser;
+
+    public FileService(SessionManager sessions, RoomManager rooms, FileRepository repository, ServerConfig config, ServerLogger log, AuditLog audit,
+                       Func<string, UserInfo?>? findActiveUser = null)
     {
+        _findActiveUser = findActiveUser;
         _audit = audit;
         _sessions = sessions;
         _rooms = rooms;
@@ -125,6 +137,38 @@ public sealed class FileService
 
     /// <summary>파일이 저장되는 최상위 폴더(절대 경로).</summary>
     public string Root => _root;
+
+    /// <summary>방 파일 보관함 페이지. 방 참여 권한을 런타임과 DB 양쪽에서 확인한다.</summary>
+    public void HandleRoomFilesRequest(ClientSession session, Packet packet)
+    {
+        RoomFilesRequest? request = packet.GetData<RoomFilesRequest>();
+        if (request is null || request.RoomId <= 0 || (request.BeforeFileId is not null && !FileRules.IsValidFileId(request.BeforeFileId)))
+        {
+            session.Send(Packet.Create(PacketType.RoomFilesRes, "파일 목록 요청이 올바르지 않습니다.", success: false));
+            return;
+        }
+        if (_rooms.GetJoinedRoom(session, request.RoomId) is null)
+        {
+            session.Send(Packet.Create(PacketType.RoomFilesRes, "참여 중인 방의 파일만 볼 수 있습니다.", success: false)
+                .WithData(new RoomFilesBatch { RoomId = request.RoomId }));
+            return;
+        }
+        try
+        {
+            var (files, hasMore) = _repository.LoadRoomGallery(session.User!.EmployeeNo, request.RoomId,
+                request.Before, request.BeforeFileId, pageSize: 50);
+            session.Send(Packet.Create(PacketType.RoomFilesRes).WithData(new RoomFilesBatch
+            {
+                RoomId = request.RoomId, Files = files, HasMore = hasMore,
+            }));
+        }
+        catch (DbException ex)
+        {
+            _log.Error($"방 파일 목록 조회 실패 (room={request.RoomId}): {ex.Message}");
+            session.Send(Packet.Create(PacketType.RoomFilesRes, "파일 목록을 불러오지 못했습니다.", success: false)
+                .WithData(new RoomFilesBatch { RoomId = request.RoomId }));
+        }
+    }
 
     /// <summary>대화 기록에 붙일 미리보기 (업로드할 때 함께 저장해 둔 "파일ID.thumb"). 없으면 null.</summary>
     public byte[]? ReadThumbnail(string storedPath)
@@ -183,7 +227,7 @@ public sealed class FileService
             // [개념] DriveInfo: 디스크(드라이브) 정보. Path.GetPathRoot("C:\\chat\\uploads") = "C:\\" → C 드라이브의 남은 공간.
             // [개념] ! (null 무시 연산자): "여기선 null이 아님을 내가 보장한다"고 컴파일러 경고를 끄는 표시. 실행에는 영향 없음.
             // [왜] 받는 도중 디스크가 가득 차면 서버 전체(로그, DB 등)가 문제를 일으킨다. 미리 확인해서 1GB 여유를 남긴다.
-            long free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace;
+            long free = new DriveInfo(Path.GetPathRoot(_root)!).AvailableFreeSpace - Interlocked.Read(ref _reservedBytes);
             if (free - offer.Size < 1024L * 1024 * 1024)
             {
                 _log.Error($"디스크 공간 부족: 남은 공간 {FileRules.FormatSize(free)}, 요청 {FileRules.FormatSize(offer.Size)}");
@@ -207,11 +251,12 @@ public sealed class FileService
         }
         else
         {
-            // 1:1 전송: 받는 사람이 지금 접속 중이어야 한다(귓속말과 같은 규칙).
-            ClientSession? target = string.IsNullOrWhiteSpace(offer.ToEmployeeNo) ? null : _sessions.FindByEmployeeNo(offer.ToEmployeeNo.Trim());
-            if (target?.User is null) { Fail("상대가 접속 중이 아니라 파일을 보낼 수 없습니다."); return; }
-            if (target == session) { Fail("자기 자신에게는 파일을 보낼 수 없습니다."); return; }
-            receiverNo = target.User.EmployeeNo;
+            // 1:1 전송: 1:1 메시지처럼 상대가 접속하지 않아도 보낼 수 있다(다음에 1:1 창을 열면 지난 대화로 보인다).
+            string to = offer.ToEmployeeNo?.Trim() ?? "";
+            UserInfo? peer = to.Length == 0 ? null : _sessions.FindByEmployeeNo(to)?.User ?? _findActiveUser?.Invoke(to);
+            if (peer is null) { Fail("받는 사람을 찾을 수 없습니다. (접속 중이 아니거나 정지·퇴사한 계정일 수 있습니다)"); return; }
+            if (peer.EmployeeNo == me.EmployeeNo) { Fail("자기 자신에게는 파일을 보낼 수 없습니다."); return; }
+            receiverNo = peer.EmployeeNo;
         }
 
         // [주의] 파일 이름도 클라이언트 입력이다. "..\\..\\a.exe" 같은 경로나 쓸 수 없는 문자를 제거한다.
@@ -220,7 +265,7 @@ public sealed class FileService
         // [개념] record: 값만 담는 간단한 불변(immutable) 클래스. 생성자 인자 순서대로 속성이 정해진다.
         // [왜] 저장 경로 "년월/파일ID" (예: 202610/abc...): 한 폴더에 파일이 수만 개 쌓이면 탐색기·파일 시스템이 느려지므로 달별로 나눈다.
         var record = new FileRecord(fileId, roomId, me.EmployeeNo, receiverNo, name, offer.Size,
-                                    FileRules.GetKind(name), $"{DateTime.Now:yyyyMM}/{fileId}", Done: false);
+                                    FileRules.GetKind(name), $"{DateTime.UtcNow:yyyyMM}/{fileId}", Done: false);
         try
         {
             // [왜] 다 받은 뒤가 아니라 "시작할 때" DB에 넣는다.
@@ -276,6 +321,7 @@ public sealed class FileService
 
         // [개념] 인덱서 대입 _uploads[key] = value: 없으면 추가, 있으면 덮어쓴다(ConcurrentDictionary에서도 원자적).
         _uploads[fileId] = upload;
+        Interlocked.Add(ref _reservedBytes, offer.Size); // 다 받거나 취소될 때 Release에서 되돌린다
         // ② "보내도 좋다" 응답. 클라이언트의 올리기 스레드는 이 패킷을 기다렸다가 조각을 보내기 시작한다.
         // [개념] target: fileId 처럼 "이름: 값"으로 인자를 넘기는 것을 명명된 인자(named argument)라고 한다. 순서를 건너뛰고 원하는 인자만 줄 수 있다.
         session.Send(Packet.Create(PacketType.FileUploadRes, target: fileId, success: true));
@@ -313,6 +359,7 @@ public sealed class FileService
                 // [개념] Write는 버퍼에 쓰고, 버퍼가 차면 디스크에 기록한다.
                 upload.Stream.Write(data);
                 upload.Received += data.Length;
+                upload.LastActivityTicks = Environment.TickCount64;
             }
             catch (IOException ex)
             {
@@ -338,9 +385,16 @@ public sealed class FileService
                 return;
             }
             upload.Closed = true;
-            upload.Stream.Dispose();
+            Release(upload);
             // [개념] out _ (버리기, discard): 꺼낸 값이 필요 없을 때 _ 로 버린다.
-            _uploads.TryRemove(record.FileId, out _);
+            _uploads.TryRemove(record.FileId, out _); // 닫기가 실패해도 목록에서는 반드시 빠지게 먼저 뺀다
+            if (!CloseStream(upload))
+            {
+                // 남은 데이터를 디스크에 쓰지 못함(디스크 가득 참 등) → 파일이 불완전하므로 취소
+                Cleanup(upload);
+                session.Send(UploadFail(record.FileId, "서버 디스크에 파일을 저장하지 못했습니다."));
+                return;
+            }
         }
 
         // [주의] 큰 파일은 몇 분씩 걸린다. 그동안 보낸 사람이 방에서 나갔다면 그 방에 파일을 올리면 안 된다(권한을 끝에서 한 번 더 확인).
@@ -478,7 +532,12 @@ public sealed class FileService
         var cancel = new CancellationTokenSource();
         string key = $"{session.Id}:{fileId}";
         // 같은 파일을 받던 이전 스레드가 아직 남아 있으면(취소 직후 재요청) 확실히 멈추게 하고 새 것으로 바꾼다
-        _downloads.AddOrUpdate(key, cancel, (_, old) => { old.Cancel(); return cancel; });
+        _downloads.AddOrUpdate(key, cancel, (_, old) =>
+        {
+            // 이전 스레드가 막 끝나 토큰을 Dispose했을 수 있다 → 그 경우는 이미 멈춘 것이니 무시
+            try { old.Cancel(); } catch (ObjectDisposedException) { }
+            return cancel;
+        });
 
         _audit.Record(AuditActions.FileDownload, me, record.SenderNo,
                       $"{record.FileName} ({FileRules.FormatSize(record.Size)})", session.RemoteEndPoint);
@@ -535,9 +594,11 @@ public sealed class FileService
             session.SendBulk(Packet.Create(PacketType.FileDownloadEnd, requestId, target: record.FileId));
             _log.Info($"파일 보내기 완료: {record.FileName} → {session}");
         }
-        catch (IOException ex)
+        // [주의] 이 스레드는 우리가 직접 만든 전용 스레드라, 여기서 잡히지 않은 예외는 서버 전체를 종료시킨다.
+        //        IOException뿐 아니라 권한 문제(백신이 파일을 잠금 등) 같은 모든 예외를 잡아 "받기 실패"로 처리한다.
+        catch (Exception ex)
         {
-            _log.Error($"[{session.Id}] 파일 읽기 실패: {ex.Message}");
+            _log.Error($"[{session.Id}] 파일 읽기 실패: {ex.GetType().Name}: {ex.Message}");
             var fail = Packet.Create(PacketType.FileDownloadRes, "서버에서 파일을 읽지 못했습니다.", target: record.FileId, success: false);
             session.SendBulk(fail);
         }
@@ -593,8 +654,9 @@ public sealed class FileService
         {
             if (upload.Closed) return;
             upload.Closed = true;
-            upload.Stream.Dispose();
+            Release(upload);
             _uploads.TryRemove(upload.Record.FileId, out _);
+            CloseStream(upload); // 실패해도 아래 정리는 계속한다
         }
         Cleanup(upload);
         // [왜] 느린 작업(파일 삭제, DB, 전송)은 lock 밖에서 한다. lock을 오래 잡고 있으면 그동안 다른 스레드가 기다려야 한다.
@@ -602,10 +664,60 @@ public sealed class FileService
         _log.Info($"파일 받기 취소: {upload.Record.FileName} ({reason ?? logReason})");
     }
 
+    /// <summary>
+    /// 임시 파일 닫기. 닫을 때 버퍼에 남은 데이터를 디스크에 쓰므로, 디스크가 가득 차 있으면 여기서 예외가 날 수 있다.
+    /// 예외를 밖으로 내보내지 않고 false를 돌려준다.
+    /// </summary>
+    // [주의] Abort는 접속 종료 정리(OnDisconnected)에서도 불린다. 여기서 예외가 새면 연결 정리가 중간에 멈추고,
+    //        그 위치가 수신 스레드의 finally라면 서버 프로세스까지 죽는다.
+    private bool CloseStream(Upload upload)
+    {
+        try
+        {
+            upload.Stream.Dispose();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ObjectDisposedException)
+        {
+            _log.Error($"임시 파일 닫기 실패({upload.Record.FileName}): {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>디스크 예약 되돌리기. Closed를 true로 바꾸는 곳(lock 안, 딱 한 번)에서만 부른다.</summary>
+    private void Release(Upload upload) => Interlocked.Add(ref _reservedBytes, -upload.Record.Size);
+
+    /// <summary>
+    /// 한동안 조각이 오지 않는 올리기를 취소한다 (하트비트 스레드가 주기적으로 부른다).
+    /// [왜] 클라이언트가 멈추거나(프로그램 오류) 일부러 조각을 안 보내면, 임시 파일·디스크 예약·DB 행이 연결이 끊길 때까지 남는다.
+    /// </summary>
+    public void AbortStalled(TimeSpan idle)
+    {
+        long now = Environment.TickCount64;
+        foreach (Upload upload in _uploads.Values.ToList())
+            if (now - upload.LastActivityTicks > idle.TotalMilliseconds)
+                Abort(upload, "오랫동안 파일 데이터가 오지 않아 전송을 취소했습니다.");
+    }
+
+    /// <summary>보관 기간이 지난 파일을 디스크에서 지운다 (미리보기 .thumb 포함). 실패해도 예외를 내지 않는다.</summary>
+    public void DeleteStoredFile(string storedPath)
+    {
+        try
+        {
+            string full = FullPath(storedPath);
+            File.Delete(full);
+            File.Delete(full + ".thumb");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log.Error($"파일 삭제 실패({storedPath}): {ex.Message}");
+        }
+    }
+
     /// <summary>임시 파일과 DB 행 삭제.</summary>
     private void Cleanup(Upload upload)
     {
-        try { File.Delete(upload.TempPath); } catch (IOException) { }
+        try { File.Delete(upload.TempPath); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         SafeDeleteRecord(upload.Record.FileId);
     }
 
@@ -624,7 +736,8 @@ public sealed class FileService
     {
         string full = Path.GetFullPath(Path.Combine(_root, storedPath));
         // DB 값이 조작돼도 업로드 폴더 밖은 읽지 않는다
-        if (!full.StartsWith(_root, StringComparison.OrdinalIgnoreCase))
+        // [주의] 끝에 구분자를 붙여 비교한다. 그냥 "C:\uploads"로 시작하는지만 보면 "C:\uploads2\..." 같은 옆 폴더도 통과한다.
+        if (!full.StartsWith(Path.TrimEndingDirectorySeparator(_root) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new IOException("업로드 폴더 밖의 경로입니다.");
         return full;
     }

@@ -24,6 +24,20 @@ public sealed class HistoryItem
 
     /// <summary>Kind == File일 때 파일 정보(미리보기 포함).</summary>
     public SharedFile? File { get; set; }
+
+    /// <summary>메시지 번호 (답장·삭제·공감에 쓴다). 파일 메시지는 0.</summary>
+    public long MessageId { get; set; }
+
+    /// <summary>답장이면 원래 메시지 요약.</summary>
+    public ReplyInfo? ReplyTo { get; set; }
+
+    /// <summary>보낸 사람이 삭제한 메시지 (Body는 비어 있다).</summary>
+    public bool Deleted { get; set; }
+
+    public bool Edited { get; set; }
+
+    /// <summary>공감 현황 (없으면 null).</summary>
+    public List<ReactionInfo>? Reactions { get; set; }
 }
 
 /// <summary>
@@ -50,4 +64,19 @@ public sealed class HistoryBatch
 
     /// <summary>마지막 묶음이면 true. 기록이 하나도 없어도 Last = true인 빈 묶음이 와서 "불러오기 끝"을 알린다.</summary>
     public bool Last { get; set; } = true;
+
+    /// <summary>이 페이지보다 오래된 기록이 더 있는지. 마지막 묶음에서만 의미가 있다.</summary>
+    public bool HasMore { get; set; }
+
+    /// <summary>1:1이면 상대가 마지막으로 읽은 시각 (내 메시지 옆 "1" 표시용). 방은 RoomInfo.Members에 있다.</summary>
+    public DateTime? PeerLastReadAt { get; set; }
+}
+
+/// <summary>이전 대화 페이지 요청. 방/1:1 대상과 마지막으로 표시한 메시지 시각을 담는다.</summary>
+public sealed class HistoryRequest
+{
+    public int? RoomId { get; set; }
+    public string? PeerNo { get; set; }
+    public DateTime? Before { get; set; }
+    public string? BeforeKey { get; set; }
 }

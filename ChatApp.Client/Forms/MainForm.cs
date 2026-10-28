@@ -29,7 +29,8 @@ namespace ChatApp.Client.Forms;
 public sealed class MainForm : Form
 {
     private readonly ChatClient _client;
-    private readonly UserInfo _me;
+    private readonly ClientSettings _settings;
+    private UserInfo _me; // 다시 로그인하면 서버가 준 최신 정보(이름·직급·권한)로 바뀐다
     private readonly FileTransferService _transfers;
 
     // 화면
@@ -48,6 +49,7 @@ public sealed class MainForm : Form
     private readonly Dictionary<string, ChatWindow> _directWindows = [];   // 사원번호 → 1:1 창
     private readonly Dictionary<int, ChatWindow> _roomWindows = [];      // 방 번호 → 방 대화창 (여러 방 동시 참여)
     private readonly Dictionary<int, RoomInfo> _joinedRooms = [];        // 내가 참여 중인 방
+    private readonly Dictionary<int, RoomFilesForm> _roomFilesForms = [];
     private ChatWindow? _lastActiveWindow;
     private List<RoomInfo> _rooms = [];
     private List<UserInfo> _users = [];
@@ -70,18 +72,39 @@ public sealed class MainForm : Form
 
     // ── 자동 재접속 ──
     private bool _reconnecting;                     // 재접속 루프가 도는 중 (두 개가 동시에 돌지 않게)
-    private readonly HashSet<int> _rejoinRooms = []; // 재접속 후 다시 입장을 요청한 방 (실패해도 팝업 대신 대화창에 알림)
+    // [왜] 시도 횟수를 필드로 둔다: 연결은 됐는데 로그인 전에 또 끊기면 새 루프가 시작되는데,
+    //      횟수가 1로 돌아가면 2초 간격으로 계속 두드리게 된다. 다시 로그인에 성공했을 때만 0으로 되돌린다.
+    private int _reconnectAttempt;
+    private readonly HashSet<int> _rejoinRooms = []; // 재접속 후 서버가 아직 다시 연결해 주지 않은 방
+    // 다시 로그인하면 서버가 내 방들을 자동으로 다시 연결해 준다. 3초 뒤에도 소식이 없는 방만 직접 입장을 요청한다.
+    private readonly System.Windows.Forms.Timer _rejoinTimer = new() { Interval = 3000 };
+
+    // ── 그 밖의 창·정보 ──
+    private readonly Dictionary<string, UserInfo> _knownPeers = []; // 사원번호 → 사람 (접속하지 않은 1:1 상대 표시용)
+    private SearchForm? _searchForm;
+    private ImageViewerForm? _imageViewer;
+    private Conversation? _imageViewerConversation;
+    private List<ChatItem> _imageViewerItems = [];
+    private string? _updateUrl;        // 새 버전 설치 파일 위치 (서버가 알려 줌)
+    private bool _updateNotified;
+    private bool _suppressUnreadToast;
+    private ContextMenuStrip? _trayMenu;
+
+    /// <summary>사용자가 "로그아웃"을 골랐는지. Program이 보고 로그인 창으로 돌아간다.</summary>
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool LogoutRequested { get; private set; }
 
     // 파일 ID → (말풍선, 대화). 진행률 갱신과 내가 보낸 파일의 확인(FileMsg)에 쓴다
     private readonly Dictionary<string, (ChatItem Item, Conversation Conv)> _fileItems = [];
 
     private int S(int v) => LogicalToDeviceUnits(v);
 
-    public MainForm(ChatClient client)
+    public MainForm(ChatClient client, ClientSettings settings)
     {
         _client = client;
+        _settings = settings;
         _me = client.Me ?? throw new InvalidOperationException("로그인 정보가 없습니다.");
-        _transfers = new FileTransferService(client.Send);
+        _transfers = new FileTransferService(client.Send, client.SendBulk);
         WireTransfers();
 
         Text = $"{Theme.AppName} - {_me.DisplayName}";
@@ -110,6 +133,8 @@ public sealed class MainForm : Form
         // 트레이 아이콘 (X로 닫으면 트레이로 숨고 계속 실행)
         Icon = CreateAppIcon();
         BuildTray();
+
+        _rejoinTimer.Tick += (_, _) => RejoinMissingRooms();
 
         Load += OnLoad;
         FormClosing += OnMainClosing;
@@ -238,7 +263,11 @@ public sealed class MainForm : Form
         _client.PacketReceived += OnPacketReceived;
         _client.Disconnected += OnDisconnected;
         _client.ReleaseHeld(); // 로그인 직후 받아 둔 방 입장 결과·접속자·방 목록을 이제 전달받는다
-        _client.Send(Packet.Create(PacketType.ServerInfoReq)); // 파일 최대 크기 확인
+        _client.Send(Packet.Create(PacketType.ServerInfoReq)); // 파일 최대 크기·최신 버전 확인
+
+        // [주의] 로그인 창이 닫히고 이 창이 이벤트를 구독하기 "전에" 연결이 끊겼다면 Disconnected 알림을 놓쳤다.
+        //        그대로 두면 "연결됨"으로 보이는데 아무것도 오지 않는다 → 여기서 한 번 확인해 재접속을 시작한다.
+        if (!_client.IsConnected) ShowDisconnected("서버와 연결이 끊어졌습니다.");
     }
 
     private void OnMainClosing(object? sender, FormClosingEventArgs e)
@@ -258,7 +287,12 @@ public sealed class MainForm : Form
         }
 
         _idleTimer.Stop();
+        _rejoinTimer.Stop();
         _toast?.Close();
+        _searchForm?.Close();
+        _adminForm?.Close();
+        // 보내던·받던 파일은 실패로 정리한다(받던 .part 임시 파일 삭제, 작업 스레드 깨우기)
+        _transfers.CancelAll(LogoutRequested ? "로그아웃했습니다." : "프로그램을 종료했습니다.");
         // [주의] NotifyIcon은 Dispose하지 않으면 프로그램이 끝난 뒤에도 트레이에 아이콘이 남아 보인다(마우스를 올리면 사라지는 유령 아이콘).
         _tray.Visible = false;
         _tray.Dispose();
@@ -296,6 +330,8 @@ public sealed class MainForm : Form
         _connected = false;
         _header.Invalidate();
         SetStatus($"● {reason}", Theme.Danger);
+        // 받다 만 지난 대화 묶음은 버린다 (다시 로그인하면 서버가 처음부터 다시 보낸다 → 섞이면 같은 말풍선이 두 번 보임)
+        foreach (Conversation c in _conversations.Values) c.PendingHistory.Clear();
         _createRoomButton.Enabled = false;
 
         // 밀려났거나(KickedOut) 로그인 정보가 없으면 재접속하지 않는다.
@@ -333,8 +369,9 @@ public sealed class MainForm : Form
         _reconnecting = true;
         try
         {
-            for (int attempt = 1; !IsDisposed && !_connected; attempt++)
+            while (!IsDisposed && !_connected)
             {
+                int attempt = ++_reconnectAttempt;
                 int delay = Math.Min(30, 1 << Math.Min(attempt, 5)); // 2, 4, 8, 16, 30, 30, ...
                 for (int left = delay; left > 0; left--)
                 {
@@ -369,7 +406,15 @@ public sealed class MainForm : Form
 
                 // 연결됨 → 다시 로그인. 이후는 LoginRes가 오면 HandleRelogin에서 처리한다.
                 // (그 전에 또 끊기면 Disconnected → ShowDisconnected → 새 루프가 다시 시작된다)
-                _client.Send(Packet.Create(PacketType.LoginReq).WithData(_client.LastLogin!));
+                if (_client.LastTokenLogin is { } tokenLogin)
+                    _client.Send(Packet.Create(PacketType.TokenLoginReq).WithData(tokenLogin));
+                else if (_client.LastLogin is { } lastLogin)
+                    _client.Send(Packet.Create(PacketType.LoginReq).WithData(lastLogin));
+                else
+                {
+                    SetStatus("● 다시 로그인해야 합니다", Theme.Danger);
+                    _client.Disconnect();
+                }
                 return;
             }
         }
@@ -396,21 +441,40 @@ public sealed class MainForm : Form
         }
 
         _connected = true;
+        _reconnectAttempt = 0;
+        // 끊긴 사이 관리자가 이름·직급·권한을 바꿨을 수 있다 → 서버가 준 최신 정보로
+        if (packet.GetData<UserInfo>() is { } latest && latest.EmployeeNo == _me.EmployeeNo)
+        {
+            _me = latest;
+            _client.Me = latest;
+            Text = $"{Theme.AppName} - {_me.DisplayName}";
+        }
         _header.Invalidate();
         SetStatus(ConnectedStatusText(), Theme.SubText);
         _createRoomButton.Enabled = true;
 
         foreach (ChatWindow window in OpenWindows())
-            window.Conversation.Add(new ChatItem { Kind = ChatItemKind.System, Text = "다시 연결되었습니다." });
-
-        // 기본 방은 서버가 로그인 때 자동으로 넣어 준다. 나머지 방은 다시 입장을 요청한다.
-        // (서버가 이전 연결의 참여를 옮겨 두었으면 "이미 참여 중"으로 바로 성공하고, 서버가 재시작됐다면 방이 사라져 실패할 수 있다)
-        _rejoinRooms.Clear();
-        foreach (int roomId in _joinedRooms.Keys.Where(id => id != RoomInfo.LobbyId).ToList())
         {
-            _rejoinRooms.Add(roomId);
-            _client.Send(Packet.Create(PacketType.RoomJoin, target: roomId.ToString()));
+            window.Conversation.Add(new ChatItem { Kind = ChatItemKind.System, Text = "다시 연결되었습니다." });
+            // 방 창은 서버가 그 방을 다시 연결해 준 뒤(RoomRes)에 입력을 연다. 기본 방과 1:1은 바로.
+            bool waitRoom = window.Kind == ChatWindowKind.Room && _roomWindows.FirstOrDefault(kv => kv.Value == window).Key is int rid && rid != RoomInfo.LobbyId;
+            window.SetInputEnabled(!waitRoom);
         }
+        // 끊기기 직전에 보낸 "읽음"이 서버에 닿지 못했을 수 있다 → 다시 보낼 수 있게 초기화하고, 보고 있는 창은 바로 다시 알린다
+        foreach (Conversation c in _conversations.Values) c.LastMarkedRead = default;
+        _suppressUnreadToast = true; // 재접속 때 다시 오는 "안 읽은 1:1" 요약으로 알림 창을 또 띄우지 않는다
+
+        // 기본 방과 내가 멤버인 방은 서버가 로그인 때 자동으로 다시 연결하고 놓친 대화도 보내 준다(RoomRes + History).
+        // 3초 뒤에도 소식이 없는 방(서버가 다시 시작되며 닫혔거나, 내보내진 방)만 직접 입장을 요청해 결과를 확인한다.
+        _rejoinRooms.Clear();
+        foreach (int roomId in _joinedRooms.Keys.Where(id => id != RoomInfo.LobbyId)) _rejoinRooms.Add(roomId);
+        _rejoinTimer.Stop();
+        if (_rejoinRooms.Count > 0) _rejoinTimer.Start();
+
+        // 1:1은 서버가 자동으로 보내 주지 않으므로, 열어 본 적 있는 1:1의 지난 대화를 다시 요청한다
+        // (끊겨 있던 동안 온 메시지가 채워지고, 같은 메시지는 번호로 걸러진다)
+        foreach (Conversation conv in _conversations.Values.Where(c => c.HistoryRequested && c.Key.StartsWith("dm:")))
+            _client.Send(Packet.Create(PacketType.HistoryReq, target: conv.Key["dm:".Length..]));
 
         // 서버는 로그인할 때마다 "온라인"으로 시작하므로, 내가 고른 상태(회의 중 등)를 다시 알린다
         if (_presence != Presence.Online)
@@ -418,6 +482,17 @@ public sealed class MainForm : Form
 
         // [주의] ChatClient는 LoginRes 성공 직후부터 패킷을 보관한다. 여기서 풀어 주지 않으면 이후 패킷이 영영 오지 않는다.
         _client.ReleaseHeld();
+        if (_lastActiveWindow is { IsDisposed: false, ContainsFocus: true } focused) MarkRead(focused.Conversation);
+    }
+
+    /// <summary>다시 로그인한 뒤 3초가 지나도 서버가 다시 연결해 주지 않은 방 → 직접 입장을 요청해 본다.</summary>
+    private void RejoinMissingRooms()
+    {
+        _rejoinTimer.Stop();
+        if (!_connected) return;
+        foreach (int roomId in _rejoinRooms.ToList())
+            _client.Send(Packet.Create(PacketType.RoomJoin, target: roomId.ToString()));
+        // 결과는 HandleRoomResponse: 성공이면 _rejoinRooms에서 빠지고, 실패면 그 방 대화창에 알린다
     }
 
     private void HandlePacket(Packet packet)
@@ -429,9 +504,24 @@ public sealed class MainForm : Form
             case PacketType.LoginRes: HandleRelogin(packet); break; // 자동 재접속 후 다시 로그인한 결과
             case PacketType.FileMsg: HandleFileMessage(packet); break;
             case PacketType.History: HandleHistory(packet); break;
+            case PacketType.RoomFilesRes: HandleRoomFilesResponse(packet); break;
             case PacketType.ServerInfo:
-                if (packet.GetData<ServerInfo>() is { MaxFileSize: > 0 } info) _transfers.MaxFileSize = info.MaxFileSize;
+                if (packet.GetData<ServerInfo>() is { } info)
+                {
+                    if (info.MaxFileSize > 0) _transfers.MaxFileSize = info.MaxFileSize;
+                    CheckClientVersion(info);
+                }
                 break;
+            case PacketType.RoomUpdate: HandleRoomUpdate(packet); break;
+            case PacketType.ReadUpdate: HandleReadUpdate(packet); break;
+            case PacketType.ReactionUpdate: HandleReactionUpdate(packet); break;
+            case PacketType.MessageDeleted: HandleMessageDeleted(packet); break;
+            case PacketType.MessageEdited: HandleMessageEdited(packet); break;
+            case PacketType.TypingUpdate: HandleTypingUpdate(packet); break;
+            case PacketType.UnreadDirect: HandleUnreadDirect(packet); break;
+            case PacketType.SearchRes:
+            case PacketType.Directory:
+                break; // 검색 창·사람 고르기 창이 직접 받는다
             case PacketType.SystemMsg: HandleSystem(packet); break;
             case PacketType.RoomRes: HandleRoomResponse(packet); break;
             case PacketType.RoomLeft: HandleRoomLeft(packet); break;
@@ -440,6 +530,8 @@ public sealed class MainForm : Form
                 _rooms = packet.GetData<List<RoomInfo>>() ?? [];
                 foreach (RoomInfo room in _rooms.Where(r => _joinedRooms.ContainsKey(r.RoomId)))
                 {
+                    // [주의] 방 목록에는 멤버 명단이 없다(가볍게 보내려고). 읽음 표시에 쓰는 명단은 이전 것을 이어받는다.
+                    room.Members ??= _joinedRooms[room.RoomId].Members;
                     _joinedRooms[room.RoomId] = room; // 인원수 등 최신 정보로
                     UpdateRoomWindowHeader(room);
                 }
@@ -448,12 +540,14 @@ public sealed class MainForm : Form
 
             case PacketType.UserList:
                 _users = packet.GetData<List<UserInfo>>() ?? [];
+                foreach (UserInfo u in _users) _knownPeers[u.EmployeeNo] = u;
                 foreach (var (no, window) in _directWindows)
                 {
                     UserInfo? user = _users.FirstOrDefault(u => u.EmployeeNo == no);
-                    window.SetOnline(user is not null);
+                    window.SetOnline(user is not null && _connected);
                     if (user is not null) window.SetHeader(user.DisplayName, UserSubtitle(user)); // 상대 상태(회의 중 등)도 보이게
                 }
+                foreach (RoomInfo room in _joinedRooms.Values) UpdateRoomMentionCandidates(room);
                 RefreshUserList();
                 break;
 
@@ -487,7 +581,10 @@ public sealed class MainForm : Form
             Text = packet.Body ?? "",
             Time = packet.Timestamp,
             Mentioned = !mine && MentionsMe(packet.Body),
+            MessageId = packet.MessageId,
+            ReplyTo = packet.ReplyTo,
         });
+        RecomputeUnread(conv);
     }
 
     private void HandleWhisper(Packet packet)
@@ -500,6 +597,7 @@ public sealed class MainForm : Form
             : _users.FirstOrDefault(u => u.EmployeeNo == packet.SenderId)
               ?? new UserInfo { EmployeeNo = packet.SenderId ?? "", Name = packet.Sender ?? "", Position = "" };
         if (other is null || other.EmployeeNo.Length == 0) return;
+        _knownPeers.TryAdd(other.EmployeeNo, other);
 
         // 받은 메시지인데 창이 없으면 자동으로 띄운다(포커스는 빼앗지 않음)
         ChatWindow window = OpenDirect(other, activate: false);
@@ -510,7 +608,10 @@ public sealed class MainForm : Form
             SenderKey = packet.SenderId ?? "",
             Text = packet.Body ?? "",
             Time = packet.Timestamp,
+            MessageId = packet.MessageId,
+            ReplyTo = packet.ReplyTo,
         });
+        RecomputeUnread(window.Conversation);
     }
 
     private void HandleSystem(Packet packet)
@@ -547,10 +648,15 @@ public sealed class MainForm : Form
             RefreshRoomList();
         }
         if (window is not null && !reading) NativeMethods.Flash(window);
-        if (reading) return;
+        if (reading)
+        {
+            MarkRead(conv); // 보고 있는 창에 온 메시지는 바로 읽음 → 보낸 사람 화면의 숫자가 줄어든다
+            return;
+        }
 
         // 알림 창 + 소리: 1:1 메시지와, 방에서 나를 부른(@이름) 메시지만. (방 메시지마다 알리면 너무 시끄럽다)
         bool direct = conv.Key.StartsWith("dm:");
+        if (!direct && int.TryParse(conv.Key["room:".Length..], out int roomId) && _settings.MutedRoomIds.Contains(roomId)) return;
         if (!direct && !item.Mentioned) return;
         if (_presence is not (Presence.Busy or Presence.DoNotDisturb)) SystemSounds.Asterisk.Play(); // 회의 중·방해 금지면 소리 끔
         string title = direct ? item.Sender : $"{conv.Title} · {item.Sender}";
@@ -590,6 +696,11 @@ public sealed class MainForm : Form
         //        진짜 권한 확인은 서버가 관리 요청마다 다시 한다(메뉴를 억지로 띄워도 서버가 거절).
         if (_me.IsAdmin)
             _statusMenu.Items.Add("관리자 메뉴...", null, (_, _) => OpenAdmin(showPending: false));
+        _statusMenu.Items.Add(new ToolStripSeparator());
+        _statusMenu.Items.Add("전체 대화 검색...", null, (_, _) => OpenSearch());
+        _statusMenu.Items.Add("동료 찾기 (오프라인 포함)...", null, (_, _) => FindPeople());
+        _statusMenu.Items.Add(new ToolStripSeparator());
+        _statusMenu.Items.Add("로그아웃", null, (_, _) => Logout());
         // 메뉴를 열 때 지금 상태에 체크 표시
         _statusMenu.Opening += (_, _) =>
         {
@@ -623,7 +734,10 @@ public sealed class MainForm : Form
     {
         using var form = new ChangePasswordForm(_client);
         if (form.ShowDialog(this) == DialogResult.OK && _client.LastLogin is LoginRequest last)
-            _client.LastLogin = new LoginRequest { EmployeeNo = last.EmployeeNo, Password = form.NewPassword };
+        {
+            _client.LastLogin = new LoginRequest { EmployeeNo = last.EmployeeNo, Password = form.NewPassword, ProtocolVersion = ProtocolInfo.Version };
+            _client.LastTokenLogin = null; // 서버가 비밀번호 변경과 함께 기존 bearer 토큰을 폐기함
+        }
     }
 
     /// <summary>관리자 창 열기 (이미 열려 있으면 앞으로). showPending = 승인 대기 목록부터.</summary>
@@ -684,8 +798,10 @@ public sealed class MainForm : Form
             status.DropDownItems.Add(Theme.PresenceText(p), StatusDotImage(Theme.PresenceColor(p)), (_, _) => SetPresence(p, auto: false));
         menu.Items.Add(status);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("로그아웃", null, (_, _) => { ShowFromTray(); Logout(); });
         menu.Items.Add("종료", null, (_, _) => { _exiting = true; Close(); });
         _tray.ContextMenuStrip = menu;
+        _trayMenu = menu;
         _tray.DoubleClick += (_, _) => ShowFromTray();
         _tray.BalloonTipClicked += (_, _) => ShowFromTray();
         _tray.Visible = true;
@@ -711,7 +827,18 @@ public sealed class MainForm : Form
             Theme.FillRounded(g, Theme.Primary, new Rectangle(0, 0, 31, 31), 8);
             Theme.DrawLogo(g, new Rectangle(5, 7, 22, 19));
         }
-        return Icon.FromHandle(bmp.GetHicon());
+        // [주의] Icon.FromHandle은 핸들을 소유하지 않아 Dispose해도 GDI 핸들이 남는다.
+        //        복제본(Clone)은 자기 핸들을 가지므로, 원래 핸들은 바로 돌려준다(DestroyIcon).
+        IntPtr handle = bmp.GetHicon();
+        try
+        {
+            using Icon borrowed = Icon.FromHandle(handle);
+            return (Icon)borrowed.Clone();
+        }
+        finally
+        {
+            NativeMethods.DestroyIcon(handle);
+        }
     }
 
     /// <summary>
@@ -748,7 +875,12 @@ public sealed class MainForm : Form
                 if (_joinedRooms.Remove(failedId, out RoomInfo? gone))
                 {
                     GetRoomConversation(gone).Add(new ChatItem { Kind = ChatItemKind.Error, Text = $"'{gone.Name}' 방에 다시 들어가지 못했습니다: {packet.Body}" });
-                    if (_roomWindows.TryGetValue(failedId, out ChatWindow? goneWindow)) goneWindow.ShowLeaveButton = false;
+                    if (_roomWindows.TryGetValue(failedId, out ChatWindow? goneWindow))
+                    {
+                        goneWindow.ShowLeaveButton = false;
+                        goneWindow.ShowInviteButton = false;
+                        goneWindow.SetInputEnabled(false); // 참여하지 않은 방이 되었으므로 보낼 수 없다
+                    }
                 }
                 RefreshRoomList();
                 return;
@@ -761,6 +893,8 @@ public sealed class MainForm : Form
         RoomInfo? room = packet.GetData<RoomInfo>();
         if (room is null) return;
         _rejoinRooms.Remove(room.RoomId);
+        bool isNew = !_joinedRooms.ContainsKey(room.RoomId);
+        bool requested = _openRoomOnJoin;
 
         // 이미 열려 있던 창이면(재접속) 입력을 다시 연다
         if (_roomWindows.TryGetValue(room.RoomId, out ChatWindow? openWindow))
@@ -771,12 +905,34 @@ public sealed class MainForm : Form
 
         // 다른 방에서는 나가지 않는다 (여러 방 동시 참여)
         _joinedRooms[room.RoomId] = room;
-        GetRoomConversation(room);
+        Conversation conv = GetRoomConversation(room);
+        conv.Title = room.Name;
+        if (!_rooms.Any(r => r.RoomId == room.RoomId)) _rooms.Add(room); // 비공개 방은 방 목록이 늦게 올 수 있다
         if (_openRoomOnJoin)
         {
             _openRoomOnJoin = false;
             OpenRoomWindow(room);
         }
+        else if (isNew && !requested && !room.IsLobby && !string.IsNullOrEmpty(packet.Body))
+        {
+            // 누가 나를 초대함 → 알려 주고, 누르면 그 방을 연다
+            SetStatus($"● {packet.Body}", Theme.Notice);
+            ShowToast("채팅방 초대", packet.Body, $"room:{room.RoomId}", () => OpenRoomWindow(room));
+        }
+        RecomputeUnread(conv);
+        RefreshRoomList();
+    }
+
+    /// <summary>방 멤버가 바뀜(입장·초대·퇴장) → 머리의 인원, 읽음 숫자 계산에 쓰는 명단을 바꾼다.</summary>
+    private void HandleRoomUpdate(Packet packet)
+    {
+        if (packet.GetData<RoomInfo>() is not { } room || !_joinedRooms.ContainsKey(room.RoomId)) return;
+        _joinedRooms[room.RoomId] = room;
+        int index = _rooms.FindIndex(r => r.RoomId == room.RoomId);
+        if (index >= 0) _rooms[index] = room;
+        UpdateRoomWindowHeader(room);
+        UpdateRoomMentionCandidates(room);
+        RecomputeUnread(GetRoomConversation(room));
         RefreshRoomList();
     }
 
@@ -814,10 +970,100 @@ public sealed class MainForm : Form
         using var form = new CreateRoomForm();
         if (form.ShowDialog(this) != DialogResult.OK) return;
 
+        var request = new CreateRoomRequest { Name = form.RoomName, MaxUsers = form.MaxUsers, IsPrivate = form.IsPrivate };
+        if (form.IsPrivate)
+        {
+            // 비공개 방은 목록에 안 보이므로 함께할 사람을 바로 고르게 한다 (건너뛰어도 나중에 [초대]로 부를 수 있다)
+            using var picker = new PeoplePickerForm(_client, $"'{form.RoomName}' 방에 초대할 사람 (건너뛰려면 취소)", multiSelect: true, [_me.EmployeeNo]);
+            if (picker.ShowDialog(this) == DialogResult.OK)
+                request.InviteNos = picker.Selected.Select(u => u.EmployeeNo).Take(Math.Max(0, form.MaxUsers - 1)).ToList();
+        }
+
         _openRoomOnJoin = true;
-        var request = new CreateRoomRequest { Name = form.RoomName, MaxUsers = form.MaxUsers };
         if (!_client.Send(Packet.Create(PacketType.RoomCreate).WithData(request)))
             _openRoomOnJoin = false;
+    }
+
+    /// <summary>방 창 머리를 눌렀을 때의 메뉴: 멤버 보기, 방장 넘기기(방장·관리자만).</summary>
+    private ContextMenuStrip BuildRoomMenu(int roomId, ChatWindow window)
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("멤버 보기", null, (_, _) => ShowMembers(roomId, window));
+        menu.Items.Add("방 파일 모아보기", null, (_, _) => OpenRoomFiles(window));
+        var mute = new ToolStripMenuItem("방 알림 끄기") { CheckOnClick = true, Checked = _settings.MutedRoomIds.Contains(roomId) };
+        mute.CheckedChanged += (_, _) =>
+        {
+            if (mute.Checked)
+            {
+                if (!_settings.MutedRoomIds.Contains(roomId)) _settings.MutedRoomIds.Add(roomId);
+            }
+            else _settings.MutedRoomIds.Remove(roomId);
+            _settings.Save();
+        };
+        menu.Items.Add(mute);
+        var notice = menu.Items.Add("공지 고정·수정...", null, (_, _) => EditRoomNotice(roomId, window));
+        var transfer = menu.Items.Add("방장 넘기기...", null, (_, _) =>
+        {
+            if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
+            string? next = PickNewOwner(room, window, "새 방장을 고르세요");
+            if (next is not null)
+                _client.Send(Packet.Create(PacketType.RoomTransferOwner, body: next, target: roomId.ToString()));
+        });
+        menu.Opening += (_, _) =>
+        {
+            RoomInfo? room = _joinedRooms.GetValueOrDefault(roomId);
+            notice.Enabled = room is not null && _connected && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
+            transfer.Enabled = room is not null && _connected && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin) && (room.Members?.Count ?? 0) > 1;
+        };
+        return menu;
+    }
+
+    /// <summary>방 멤버 중 새 방장 고르기 (나 제외). 고르지 않으면 null.</summary>
+    /// <remarks>skipText를 주면 "고르지 않고 진행" 버튼이 생기고, 누르면 빈 문자열("")을 돌려준다.</remarks>
+    private string? PickNewOwner(RoomInfo room, IWin32Window owner, string title, string? skipText = null)
+    {
+        var members = (room.Members ?? [])
+            .Where(m => m.EmployeeNo != _me.EmployeeNo && m.EmployeeNo != room.OwnerNo)
+            .Select(m => new UserInfo { EmployeeNo = m.EmployeeNo, Name = m.DisplayName, Department = _users.Any(u => u.EmployeeNo == m.EmployeeNo) ? "접속 중" : "" })
+            .ToList();
+        if (members.Count == 0)
+        {
+            MessageBox.Show(owner, "방장을 넘길 다른 멤버가 없습니다.", "방장 넘기기", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return null;
+        }
+        using var picker = new PeoplePickerForm(_client, $"'{room.Name}' - {title}", multiSelect: false, [],
+            people: members, okText: "방장 넘기기", hint: "더블클릭하거나 고른 뒤 [방장 넘기기]", skipText: skipText);
+        DialogResult result = picker.ShowDialog(owner);
+        if (result == DialogResult.Ignore) return "";
+        return result == DialogResult.OK && picker.Selected.Count > 0 ? picker.Selected[0].EmployeeNo : null;
+    }
+
+    /// <summary>방 멤버 목록 (방장, 접속 중 표시).</summary>
+    private void ShowMembers(int roomId, IWin32Window owner)
+    {
+        if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room) || room.Members is null) return;
+        var online = _users.Select(u => u.EmployeeNo).ToHashSet();
+        online.Add(_me.EmployeeNo);
+        IEnumerable<string> lines = room.Members
+            .OrderByDescending(m => m.EmployeeNo == room.OwnerNo).ThenByDescending(m => online.Contains(m.EmployeeNo)).ThenBy(m => m.DisplayName)
+            .Select(m => $"{(online.Contains(m.EmployeeNo) ? "●" : "○")} {m.DisplayName} ({m.EmployeeNo}){(m.EmployeeNo == room.OwnerNo ? "  [방장]" : "")}");
+        MessageBox.Show(owner, $"멤버 {room.Members.Count}명 (● 접속 중)\n\n{string.Join("\n", lines)}", $"'{room.Name}' 멤버",
+            MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    /// <summary>[초대] → 사람 고르기 → 서버에 초대 요청 (이미 멤버인 사람은 목록에서 뺀다).</summary>
+    private void InviteToRoom(int roomId, IWin32Window owner)
+    {
+        if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
+        var members = room.Members?.Select(m => m.EmployeeNo) ?? [];
+        using var picker = new PeoplePickerForm(_client, $"'{room.Name}' 방에 초대", multiSelect: true, members.Append(_me.EmployeeNo));
+        if (picker.ShowDialog(owner) != DialogResult.OK) return;
+        _client.Send(Packet.Create(PacketType.RoomInvite).WithData(new RoomInviteRequest
+        {
+            RoomId = roomId,
+            EmployeeNos = picker.Selected.Select(u => u.EmployeeNo).ToList(),
+        }));
+        // 결과: 초대된 사람에게 RoomRes, 방 사람들에게 SystemMsg("…님을 초대했습니다") + RoomUpdate
     }
 
     /// <summary>
@@ -835,12 +1081,40 @@ public sealed class MainForm : Form
         int roomId = room.RoomId;
         Conversation conv = GetRoomConversation(room);
         var window = new ChatWindow(ChatWindowKind.Room, conv, $"room:{roomId}");
+        UpdateRoomMentionCandidates(room);
         window.ShowLeaveButton = !room.IsLobby;
-        window.SendRequested += (_, text) =>
-            _client.Send(Packet.Create(PacketType.ChatMsg, body: text, target: roomId.ToString()));
+        window.ShowInviteButton = !room.IsLobby;
+        window.SendRequested += (_, text, replyId) => SendText(PacketType.ChatMsg, text, roomId.ToString(), replyId);
+        window.InviteRequested += _ => InviteToRoom(roomId, window);
+        window.ShowDeleteButton = !room.IsLobby && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
+        if (!room.IsLobby) window.HeaderMenu = BuildRoomMenu(roomId, window);
+        window.DeleteRoomRequested += _ =>
+        {
+            RoomInfo current = _joinedRooms.GetValueOrDefault(roomId) ?? room;
+            if (MessageBox.Show(window,
+                    $"'{current.Name}' 방을 삭제할까요?\n\n멤버 {current.MemberCount}명 모두가 방에서 빠지고, 방 목록에서 사라집니다.\n(대화 기록은 서버에 남습니다. 되돌릴 수 없습니다)",
+                    "방 삭제", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                _client.Send(Packet.Create(PacketType.RoomDelete, target: roomId.ToString()));
+            // 결과: 접속 중인 멤버 모두에게 RoomLeft → 창이 닫히고 목록에서 빠진다
+        };
         window.LeaveRequested += _ =>
         {
-            if (MessageBox.Show(window, $"'{room.Name}' 방에서 나갈까요?", "채팅방 나가기",
+            RoomInfo current = _joinedRooms.GetValueOrDefault(roomId) ?? room;
+            // 방장이 나가려면 먼저 방장을 넘길 사람을 고른다 (고르지 않으면 서버가 가장 오래된 멤버에게 자동으로 넘긴다)
+            if (current.OwnerNo == _me.EmployeeNo && (current.Members?.Count ?? 0) > 1)
+            {
+                string? next = PickNewOwner(current, window, "나가기 전에 방장을 넘길 사람을 고르세요",
+                                            skipText: "그냥 나가기 (자동으로 넘기기)");
+                if (next is null) return; // 취소 = 나가지 않음
+                // "그냥 나가기"("")면 넘기지 않고 나간다 → 서버가 가장 먼저 들어온 멤버를 새 방장으로 정하고 방에 알린다
+                if (next.Length > 0)
+                    _client.Send(Packet.Create(PacketType.RoomTransferOwner, body: next, target: roomId.ToString()));
+                _client.Send(Packet.Create(PacketType.RoomLeave, target: roomId.ToString())); // 같은 연결이라 순서대로 처리된다
+                return;
+            }
+            string note = "\n다른 멤버가 남아 있으면 방은 그대로 남습니다. (방을 없애려면 방장이 [방 삭제])";
+            if (current.IsPrivate) note += "\n비공개 방이라 다시 들어오려면 멤버의 초대가 필요합니다.";
+            if (MessageBox.Show(window, $"'{current.Name}' 방에서 나갈까요?{note}", "채팅방 나가기",
                     MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                 _client.Send(Packet.Create(PacketType.RoomLeave, target: roomId.ToString()));
             // 창은 서버가 RoomLeft로 확인해 주면 닫힌다
@@ -854,6 +1128,7 @@ public sealed class MainForm : Form
 
         _roomWindows[roomId] = window;
         UpdateRoomWindowHeader(room);
+        UpdateRoomMentionCandidates(room);
         window.SetInputEnabled(_connected);
         window.Show();
     }
@@ -861,8 +1136,35 @@ public sealed class MainForm : Form
     private void UpdateRoomWindowHeader(RoomInfo room)
     {
         if (!_roomWindows.TryGetValue(room.RoomId, out ChatWindow? window)) return;
-        string owner = room.OwnerName is null ? "모두가 함께하는 기본 방" : $"방장 {room.OwnerName}";
-        window.SetHeader(room.Name, $"{room.CapacityText} 참여 중 · {owner}");
+        if (room.IsLobby)
+        {
+            window.SetPinnedNotice(null);
+            window.SetHeader(room.Name, $"{room.MemberCount}명 접속 중 · 모두가 함께하는 기본 방");
+            return;
+        }
+        // 멤버(접속하지 않은 사람 포함)와 지금 접속한 사람을 따로 보여 준다
+        window.ShowDeleteButton = room.OwnerNo == _me.EmployeeNo || _me.IsAdmin; // 방장이 바뀌면 버튼도 따라간다
+        window.SetPinnedNotice(room.PinnedNotice);
+        string max = room.MaxUsers > 0 ? $"/{room.MaxUsers}" : "";
+        string kind = room.IsPrivate ? "비공개 · " : "";
+        window.SetHeader(room.Name, $"{kind}멤버 {room.MemberCount}{max}명 · 접속 {room.OnlineCount}명 · 방장 {room.OwnerName}");
+    }
+
+    private void EditRoomNotice(int roomId, IWin32Window owner)
+    {
+        if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
+        using var form = new RoomNoticeForm(room.Name, room.PinnedNotice);
+        if (form.ShowDialog(owner) != DialogResult.OK) return;
+        _client.Send(Packet.Create(PacketType.RoomNotice).WithData(new RoomNoticeRequest { RoomId = roomId, Text = form.NoticeText }));
+    }
+
+    private void UpdateRoomMentionCandidates(RoomInfo room)
+    {
+        if (!_roomWindows.TryGetValue(room.RoomId, out ChatWindow? window)) return;
+        IEnumerable<(string EmployeeNo, string DisplayName)> candidates = room.IsLobby
+            ? _users.Select(u => (u.EmployeeNo, u.DisplayName))
+            : (room.Members ?? []).Select(m => (m.EmployeeNo, m.DisplayName));
+        window.SetMentionCandidates(candidates, _me.EmployeeNo);
     }
 
     private Conversation GetRoomConversation(RoomInfo room)
@@ -887,15 +1189,19 @@ public sealed class MainForm : Form
             _client.Send(Packet.Create(PacketType.HistoryReq, target: user.EmployeeNo));
         }
         var window = new ChatWindow(ChatWindowKind.Direct, conv, user.EmployeeNo);
-        window.SetHeader(user.DisplayName, UserSubtitle(user));
-        window.SendRequested += (_, text) =>
-            _client.Send(Packet.Create(PacketType.Whisper, body: text, target: user.EmployeeNo));
+        bool online = _users.Any(u => u.EmployeeNo == user.EmployeeNo);
+        window.SetHeader(user.DisplayName, online ? UserSubtitle(user) : "접속하지 않음 · 보낸 메시지는 다음에 접속하면 전달됩니다");
+        window.SendRequested += (_, text, replyId) => SendText(PacketType.Whisper, text, user.EmployeeNo, replyId);
         window.FilesRequested += (_, paths) => SendFiles(conv, paths, null, user.EmployeeNo);
         WireWindow(window);
-        window.FormClosed += (_, _) => _directWindows.Remove(user.EmployeeNo);
+        window.FormClosed += (_, _) =>
+        {
+            if (_directWindows.TryGetValue(user.EmployeeNo, out ChatWindow? w) && w == window) _directWindows.Remove(user.EmployeeNo);
+        };
         _directWindows[user.EmployeeNo] = window;
 
-        window.SetOnline(_connected && _users.Any(u => u.EmployeeNo == user.EmployeeNo));
+        window.SetOnline(_connected && online);
+        window.SetInputEnabled(_connected);
         if (activate) window.Show();
         else window.ShowInactive();
         return window;
@@ -922,6 +1228,8 @@ public sealed class MainForm : Form
         }
         if (conv is null) return; // 그사이 방에서 나갔거나 대화가 사라짐
 
+        conv.HistoryHasMore = batch.HasMore;
+
         foreach (HistoryItem h in batch.Items)
         {
             bool mine = h.SenderNo == _me.EmployeeNo;
@@ -933,15 +1241,28 @@ public sealed class MainForm : Form
                 Text = h.Body,
                 Time = h.Time,
                 File = h.File is null ? null : new ChatFile { Info = h.File },
+                MessageId = h.MessageId,
+                ReplyTo = h.ReplyTo,
+                Deleted = h.Deleted,
+                Edited = h.Edited,
+                Reactions = h.Reactions ?? [],
             };
             if (h.File is not null) _fileItems.TryAdd(h.File.FileId, (item, conv)); // 기록 속 파일도 클릭해서 받을 수 있게
             conv.PendingHistory.Add(item);
         }
         if (!batch.Last) return;
 
+        // 1:1: 상대가 어디까지 읽었는지 (내 메시지 옆 "1" 표시)
+        if (batch.PeerLastReadAt is DateTime peerRead && (conv.PeerLastReadAt is null || peerRead > conv.PeerLastReadAt))
+            conv.PeerLastReadAt = peerRead;
+
         var all = conv.PendingHistory.ToList();
         conv.PendingHistory.Clear();
+        conv.HistoryLoading = false;
         conv.InsertHistory(all);
+        conv.LoadingOlderHistory = false;
+        RecomputeUnread(conv);
+        if (OpenWindows().FirstOrDefault(w => w.Conversation == conv) is { ContainsFocus: true }) MarkRead(conv);
     }
 
     // ───────────────────────── 파일·이미지·동영상 ─────────────────────────
@@ -1111,7 +1432,12 @@ public sealed class MainForm : Form
                         CancelTransfer(window, item);
                     return;
                 }
-                if (file.HasLocalFile) { OpenLocalFile(window, file.LocalPath!, file.Info.FileName); return; }
+                if (file.HasLocalFile)
+                {
+                    if (file.Info.Kind == FileKind.Image) OpenImageViewer(window.Conversation, item);
+                    else OpenLocalFile(window, file.LocalPath!, file.Info.FileName);
+                    return;
+                }
                 if (file.IsBusy || file.State == FileState.Failed) return;
 
                 // 예전에 받아 둔 파일이 있으면 다시 받지 않는다
@@ -1120,7 +1446,8 @@ public sealed class MainForm : Form
                 {
                     file.LocalPath = cache;
                     window.Conversation.NotifyChanged(item);
-                    OpenLocalFile(window, cache, file.Info.FileName);
+                    if (file.Info.Kind == FileKind.Image) OpenImageViewer(window.Conversation, item);
+                    else OpenLocalFile(window, cache, file.Info.FileName);
                     return;
                 }
                 StartDownload(window, item, cache, openWhenDone: true);
@@ -1156,6 +1483,37 @@ public sealed class MainForm : Form
                     Process.Start("explorer.exe", $"/select,\"{file.LocalPath}\"");
                 break;
         }
+    }
+
+    private void OpenRoomFiles(ChatWindow window)
+    {
+        if (window.Kind != ChatWindowKind.Room) return;
+        if (!int.TryParse(window.Conversation.Key["room:".Length..], out int roomId)) return;
+        if (_roomFilesForms.TryGetValue(roomId, out RoomFilesForm? existing) && !existing.IsDisposed)
+        {
+            existing.Activate();
+            return;
+        }
+        using var form = new RoomFilesForm(window.Conversation.Title, window.Conversation.Items);
+        _roomFilesForms[roomId] = form;
+        form.LoadMoreRequested += (before, beforeFileId) =>
+        {
+            bool sent = _client.Send(Packet.Create(PacketType.RoomFilesReq).WithData(
+                new RoomFilesRequest { RoomId = roomId, Before = before, BeforeFileId = beforeFileId }));
+            if (!sent) form.AddPage([], hasMore: false, error: "서버 연결이 끊겨 파일 목록을 요청하지 못했습니다.");
+        };
+        form.FormClosed += (_, _) => _roomFilesForms.Remove(roomId);
+        form.OpenRequested += item => OnFileCommand(window, item, FileCommand.Open);
+        form.SaveRequested += item => OnFileCommand(window, item, FileCommand.SaveAs);
+        form.RequestNextPage();
+        form.ShowDialog(window);
+    }
+
+    private void HandleRoomFilesResponse(Packet packet)
+    {
+        RoomFilesBatch? batch = packet.GetData<RoomFilesBatch>();
+        if (batch is null || !_roomFilesForms.TryGetValue(batch.RoomId, out RoomFilesForm? form) || form.IsDisposed) return;
+        form.AddPage(batch.Files, batch.HasMore, packet.Success ? null : packet.Body ?? "파일 목록 조회에 실패했습니다.");
     }
 
     /// <summary>
@@ -1197,13 +1555,59 @@ public sealed class MainForm : Form
 
         if (file.OpenWhenDownloaded)
         {
+            file.OpenWhenDownloaded = false;
             ChatWindow? owner = OpenWindows().FirstOrDefault(w => w.Conversation == entry.Conv);
-            OpenLocalFile(owner ?? (IWin32Window)this, path, file.Info.FileName);
+            if (file.Info.Kind == FileKind.Image) OpenImageViewer(entry.Conv, entry.Item);
+            else OpenLocalFile(owner ?? (IWin32Window)this, path, file.Info.FileName);
         }
+        else if (_imageViewer is { IsDisposed: false, Visible: true } && _imageViewerConversation == entry.Conv &&
+                 _imageViewerItems.ElementAtOrDefault(_imageViewer.CurrentIndex) == entry.Item)
+            _imageViewer.ShowImage(path);
         else
         {
             entry.Conv.Add(new ChatItem { Kind = ChatItemKind.System, Text = $"저장했습니다: {path}" });
         }
+    }
+
+    private void OpenImageViewer(Conversation conversation, ChatItem selected)
+    {
+        _imageViewerItems = conversation.Items.Where(i => i.File?.Info.Kind == FileKind.Image).ToList();
+        if (_imageViewerItems.Count == 0) return;
+        int index = _imageViewerItems.IndexOf(selected);
+        if (index < 0) return;
+        _imageViewerConversation = conversation;
+        if (_imageViewer is null || _imageViewer.IsDisposed)
+        {
+            _imageViewer = new ImageViewerForm();
+            _imageViewer.NavigationRequested += LoadImageViewerItem;
+            _imageViewer.FormClosed += (_, _) => { _imageViewer = null; _imageViewerConversation = null; _imageViewerItems.Clear(); };
+        }
+        if (!_imageViewer.Visible) _imageViewer.Show(this);
+        _imageViewer.ShowItem(index, _imageViewerItems.Count, selected.File!.Info.FileName);
+        _imageViewer.BringToFront();
+        LoadImageViewerItem(index);
+    }
+
+    private void LoadImageViewerItem(int index)
+    {
+        if (_imageViewer is not { IsDisposed: false } viewer || _imageViewerConversation is not { } conversation ||
+            index < 0 || index >= _imageViewerItems.Count) return;
+        ChatItem item = _imageViewerItems[index];
+        if (item.File is not ChatFile file) return;
+        viewer.ShowItem(index, _imageViewerItems.Count, file.Info.FileName);
+        if (file.HasLocalFile) { viewer.ShowImage(file.LocalPath!); return; }
+        string cache = CachePath(file.Info);
+        if (File.Exists(cache) && new FileInfo(cache).Length == file.Info.Size)
+        {
+            file.LocalPath = cache;
+            viewer.ShowImage(cache);
+            return;
+        }
+        if (!_connected || file.IsBusy || file.State == FileState.Failed) return;
+        if (!_transfers.StartDownload(file.Info.FileId, cache)) return;
+        file.State = FileState.Downloading;
+        file.Percent = 0;
+        conversation.NotifyChanged(item);
     }
 
     /// <summary>받은 파일 보관 위치: %LocalAppData%\ChatApp\files\파일ID\원래이름</summary>
@@ -1229,6 +1633,318 @@ public sealed class MainForm : Form
         }
     }
 
+    // ───────────────────────── 읽음 표시 (카카오톡의 노란 숫자) ─────────────────────────
+
+    /// <summary>
+    /// 대화창을 보고 있음 → 서버에 "여기까지 읽음"을 알린다. 서버는 저장하고 방 사람들(1:1이면 상대)에게 ReadUpdate로 알린다.
+    /// 기본 방은 인원이 많아 읽음 표시를 하지 않는다.
+    /// </summary>
+    private void MarkRead(Conversation conv)
+    {
+        if (!_connected || conv.LatestMessageTime is not DateTime upTo || upTo <= conv.LastMarkedRead) return;
+        ReadMark mark;
+        if (TryGetRoomId(conv, out int roomId))
+        {
+            if (roomId == RoomInfo.LobbyId || !_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
+            mark = new ReadMark { RoomId = roomId, UpTo = upTo };
+            SetMemberRead(room, _me.EmployeeNo, upTo); // 내 화면의 숫자는 서버 응답을 기다리지 않고 바로 줄인다
+        }
+        else if (conv.Key.StartsWith("dm:"))
+        {
+            mark = new ReadMark { PeerNo = conv.Key["dm:".Length..], UpTo = upTo };
+        }
+        else return;
+
+        conv.LastMarkedRead = upTo;
+        _client.Send(Packet.Create(PacketType.ReadMark).WithData(mark));
+        RecomputeUnread(conv);
+    }
+
+    /// <summary>누가 어디까지 읽었다 (방: 멤버 한 명, 1:1: 상대).</summary>
+    private void HandleReadUpdate(Packet packet)
+    {
+        if (packet.GetData<ReadUpdate>() is not { } update) return;
+        if (update.RoomId is int roomId)
+        {
+            if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
+            SetMemberRead(room, update.EmployeeNo, update.LastReadAt);
+            RecomputeUnread(GetRoomConversation(room));
+        }
+        else if (update.PeerNo is string peer && _conversations.TryGetValue(Conversation.DirectKey(peer), out Conversation? conv))
+        {
+            if (conv.PeerLastReadAt is null || update.LastReadAt > conv.PeerLastReadAt) conv.PeerLastReadAt = update.LastReadAt;
+            RecomputeUnread(conv);
+        }
+    }
+
+    private static void SetMemberRead(RoomInfo room, string employeeNo, DateTime upTo)
+    {
+        RoomMemberInfo? member = room.Members?.FirstOrDefault(m => m.EmployeeNo == employeeNo);
+        if (member is not null && (member.LastReadAt is null || upTo > member.LastReadAt)) member.LastReadAt = upTo;
+    }
+
+    /// <summary>
+    /// 말풍선마다 "안 읽은 사람 수"를 다시 계산한다.
+    /// 방: 멤버마다 "여기까지 읽음" 시각 = max(마지막 읽음, 들어온 시각). 그 시각이 메시지보다 앞인 멤버 수 − (보낸 사람이 거기 들어 있으면 1).
+    /// 1:1: 내 메시지인데 상대가 읽은 시각보다 뒤면 1.
+    /// </summary>
+    // [왜] 멤버 시각을 정렬해 두고 이진 탐색으로 센다. 메시지 수 × 멤버 수만큼 비교하면 큰 방에서 느려진다.
+    private void RecomputeUnread(Conversation conv)
+    {
+        bool changed = false;
+        void Set(ChatItem item, int count)
+        {
+            if (item.UnreadCount == count) return;
+            item.UnreadCount = count;
+            changed = true;
+        }
+
+        if (TryGetRoomId(conv, out int roomId))
+        {
+            if (roomId == RoomInfo.LobbyId || !_joinedRooms.TryGetValue(roomId, out RoomInfo? room) || room.Members is not { Count: > 0 } members)
+                return;
+            var readUpTo = new Dictionary<string, DateTime>();
+            foreach (RoomMemberInfo m in members)
+                readUpTo[m.EmployeeNo] = m.LastReadAt is DateTime r && r > m.JoinedAt ? r : m.JoinedAt;
+            DateTime[] sorted = readUpTo.Values.Order().ToArray();
+            foreach (ChatItem item in conv.Items)
+            {
+                if (item.IsSystemLike) continue;
+                int count = CountBefore(sorted, item.Time);
+                if (readUpTo.TryGetValue(item.SenderKey, out DateTime senderRead) && senderRead < item.Time) count--; // 보낸 사람은 읽은 것으로
+                Set(item, Math.Max(0, count));
+            }
+        }
+        else if (conv.Key.StartsWith("dm:"))
+        {
+            DateTime peerRead = conv.PeerLastReadAt ?? DateTime.MinValue;
+            foreach (ChatItem item in conv.Items)
+                if (!item.IsSystemLike) Set(item, item.Kind == ChatItemKind.Mine && peerRead < item.Time ? 1 : 0);
+        }
+        if (changed) conv.NotifyReadStateChanged();
+    }
+
+    /// <summary>정렬된 배열에서 time보다 앞(작은)인 값의 개수.</summary>
+    private static int CountBefore(DateTime[] sorted, DateTime time)
+    {
+        int lo = 0, hi = sorted.Length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) / 2;
+            if (sorted[mid] < time) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    private static bool TryGetRoomId(Conversation conv, out int roomId)
+    {
+        roomId = 0;
+        return conv.Key.StartsWith("room:") && int.TryParse(conv.Key["room:".Length..], out roomId);
+    }
+
+    // ───────────────────────── 공감·삭제 ─────────────────────────
+
+    /// <summary>방이면 방 대화, 1:1이면 그 상대와의 대화 (없으면 null).</summary>
+    private Conversation? FindConversation(int? roomId, string? peerNo)
+    {
+        if (roomId is int id) return _joinedRooms.TryGetValue(id, out RoomInfo? room) ? GetRoomConversation(room) : null;
+        return peerNo is not null && _conversations.TryGetValue(Conversation.DirectKey(peerNo), out Conversation? conv) ? conv : null;
+    }
+
+    private void HandleReactionUpdate(Packet packet)
+    {
+        if (packet.GetData<ReactionUpdate>() is not { } update) return;
+        Conversation? conv = FindConversation(update.RoomId, update.PeerNo);
+        if (conv?.FindMessage(update.MessageId) is not { } item) return; // 아직 불러오지 않은 옛 메시지
+        item.Reactions = update.Reactions;
+        conv.NotifyChanged(item);
+    }
+
+    private void HandleMessageDeleted(Packet packet)
+    {
+        if (packet.GetData<MessageRef>() is not { } deleted) return;
+        Conversation? conv = FindConversation(deleted.RoomId, deleted.PeerNo);
+        if (conv is null) return;
+        if (conv.FindMessage(deleted.MessageId) is { } item)
+        {
+            item.Deleted = true;
+            item.Reactions = [];
+            conv.NotifyChanged(item);
+        }
+        // 이 메시지에 단 답장들의 인용도 바꾼다 (지워진 내용이 인용으로 남아 보이지 않게)
+        foreach (ChatItem reply in conv.Items.Where(i => i.ReplyTo?.MessageId == deleted.MessageId))
+        {
+            reply.ReplyTo!.Text = "삭제된 메시지입니다.";
+            conv.NotifyChanged(reply);
+        }
+    }
+
+    private void HandleMessageEdited(Packet packet)
+    {
+        if (packet.GetData<MessageRef>() is not { } edited) return;
+        Conversation? conv = FindConversation(edited.RoomId, edited.PeerNo);
+        if (conv?.FindMessage(edited.MessageId) is not { } item || item.Deleted) return;
+        item.Text = packet.Body ?? "";
+        item.Edited = true;
+        conv.NotifyChanged(item);
+    }
+
+    private void HandleTypingUpdate(Packet packet)
+    {
+        if (packet.GetData<TypingInfo>() is not { } typing) return;
+        Conversation? conv = FindConversation(typing.RoomId, typing.PeerNo);
+        if (conv is null) return;
+        ChatWindow? window = OpenWindows().FirstOrDefault(w => w.Conversation == conv);
+        window?.SetTypingIndicator(typing.EmployeeNo, typing.DisplayName, typing.IsTyping);
+    }
+
+    // ───────────────────────── 접속하지 않은 동안 온 1:1 ─────────────────────────
+
+    /// <summary>로그인 직후 서버가 알려 준 "안 읽은 1:1" 요약 → 동료 목록에 숫자로 보이고, 알림 창으로 알린다.</summary>
+    private void HandleUnreadDirect(Packet packet)
+    {
+        List<UnreadDirect> list = packet.GetData<List<UnreadDirect>>() ?? [];
+        if (list.Count == 0) return;
+        foreach (UnreadDirect u in list)
+        {
+            UserInfo peer = KnownPeer(u.PeerNo, u.PeerName);
+            Conversation conv = GetConversation(Conversation.DirectKey(u.PeerNo), peer.DisplayName);
+            conv.Unread = Math.Max(conv.Unread, u.Count);
+        }
+        RefreshUserList();
+
+        bool quiet = _suppressUnreadToast;
+        _suppressUnreadToast = false;
+        if (quiet) return; // 자동 재접속: 숫자만 갱신하고 소리·알림 창은 띄우지 않는다
+
+        int total = list.Sum(u => u.Count);
+        UnreadDirect first = list.OrderByDescending(u => u.LastTime).First();
+        SetStatus($"● 접속하지 않은 동안 1:1 메시지 {total}개가 왔습니다.", Theme.Notice);
+        if (_presence is not (Presence.Busy or Presence.DoNotDisturb)) SystemSounds.Asterisk.Play();
+        string title = list.Count == 1 ? first.PeerName : $"{first.PeerName} 외 {list.Count - 1}명";
+        ShowToast(title, $"[안 읽은 메시지 {total}개] {first.LastText}", first.PeerNo,
+            () => OpenDirect(KnownPeer(first.PeerNo, first.PeerName), activate: true));
+    }
+
+    /// <summary>사원번호로 사람 정보 찾기. 모르면 표시 이름("홍길동 대리")으로 만든다.</summary>
+    private UserInfo KnownPeer(string employeeNo, string? displayName)
+    {
+        if (_users.FirstOrDefault(u => u.EmployeeNo == employeeNo) is { } online) return online;
+        if (_knownPeers.TryGetValue(employeeNo, out UserInfo? known)) return known;
+        string name = displayName?.Trim() is { Length: > 0 } d ? d : employeeNo;
+        int space = name.LastIndexOf(' ');
+        var peer = new UserInfo
+        {
+            EmployeeNo = employeeNo,
+            Name = space > 0 ? name[..space] : name,
+            Position = space > 0 ? name[(space + 1)..] : "",
+        };
+        _knownPeers[employeeNo] = peer;
+        return peer;
+    }
+
+    // ───────────────────────── 전체 검색·동료 찾기·로그아웃·업데이트 ─────────────────────────
+
+    private void OpenSearch()
+    {
+        if (_searchForm is null || _searchForm.IsDisposed)
+        {
+            _searchForm = new SearchForm(_client);
+            _searchForm.HitActivated += OpenSearchHit;
+            _searchForm.FormClosed += (_, _) => _searchForm = null;
+            _searchForm.Show();
+        }
+        else
+        {
+            BringToFront(_searchForm);
+        }
+    }
+
+    /// <summary>검색 결과를 더블클릭 → 그 대화창을 열고, 불러온 대화 안에 있으면 그 메시지로 이동한다.</summary>
+    private void OpenSearchHit(SearchHit hit)
+    {
+        ChatWindow? window = null;
+        if (hit.RoomId is int roomId)
+        {
+            if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room))
+            {
+                SetStatus("● 지금은 참여하지 않은 방입니다.", Theme.SubText);
+                return;
+            }
+            OpenRoomWindow(room);
+            window = _roomWindows.GetValueOrDefault(roomId);
+        }
+        else if (hit.PeerNo is string peer)
+        {
+            window = OpenDirect(KnownPeer(peer, hit.PeerName), activate: true);
+        }
+        window?.FocusMessage(hit.MessageId);
+    }
+
+    /// <summary>접속하지 않은 사람까지 회사 전체에서 골라 1:1 대화 열기.</summary>
+    private void FindPeople()
+    {
+        using var picker = new PeoplePickerForm(_client, "동료 찾기 (접속하지 않은 사람 포함)", multiSelect: false, [_me.EmployeeNo]);
+        if (picker.ShowDialog(this) != DialogResult.OK || picker.Selected.Count == 0) return;
+        UserInfo user = picker.Selected[0];
+        _knownPeers[user.EmployeeNo] = user;
+        OpenDirect(user, activate: true);
+    }
+
+    /// <summary>로그아웃 → 연결을 끊고 로그인 창으로 돌아간다 (Program이 LogoutRequested를 본다).</summary>
+    private void Logout()
+    {
+        if (MessageBox.Show(this, "로그아웃할까요?\n열려 있는 대화창이 모두 닫히고 로그인 화면으로 돌아갑니다.", Theme.AppName,
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+        LogoutRequested = true;
+        _exiting = true;
+        Close();
+    }
+
+    /// <summary>
+    /// 서버가 알려 준 최신 클라이언트 버전과 내 버전 비교. 낮으면 상태 줄·알림 창으로 알리고, 설치 파일 위치가 있으면 메뉴에서 열 수 있게 한다.
+    /// </summary>
+    // [개념] Assembly 버전: csproj의 <Version>1.3.0</Version>이 빌드할 때 exe에 들어간다.
+    private void CheckClientVersion(ServerInfo info)
+    {
+        if (info.ProtocolVersion > ProtocolInfo.Version)
+            SetStatus("● 서버가 더 새 버전입니다. 사내톡을 업데이트하세요.", Theme.Notice);
+
+        if (_updateNotified || string.IsNullOrWhiteSpace(info.LatestClientVersion) ||
+            !Version.TryParse(info.LatestClientVersion, out Version? latest))
+            return;
+        Version mine = typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0);
+        static Version Norm(Version v) => new(v.Major, v.Minor, Math.Max(0, v.Build));
+        if (Norm(mine) >= Norm(latest)) return;
+
+        _updateNotified = true;
+        _updateUrl = string.IsNullOrWhiteSpace(info.ClientUpdateUrl) ? null : info.ClientUpdateUrl;
+        string how = _updateUrl is null ? "관리자에게 설치 파일을 받으세요." : "내 이름을 눌러 메뉴 → \"새 버전 설치\"";
+        SetStatus($"● 새 버전 {Norm(latest).ToString(3)}이 있습니다 (지금 {Norm(mine).ToString(3)}). {how}", Theme.Notice);
+        if (_updateUrl is not null)
+        {
+            _statusMenu.Items.Insert(0, new ToolStripSeparator());
+            _statusMenu.Items.Insert(0, new ToolStripMenuItem($"새 버전 {Norm(latest).ToString(3)} 설치...", null, (_, _) => OpenUpdate()));
+        }
+        ShowToast("새 버전이 있습니다", $"사내톡 {Norm(latest).ToString(3)}이 배포되었습니다. {how}", Theme.AppName,
+            () => { if (_updateUrl is not null) OpenUpdate(); });
+    }
+
+    private void OpenUpdate()
+    {
+        if (_updateUrl is null) return;
+        try
+        {
+            // 설치 파일(공유 폴더의 exe) 또는 다운로드 웹 페이지를 윈도우에 연결된 프로그램으로 연다
+            Process.Start(new ProcessStartInfo(_updateUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            MessageBox.Show(this, $"설치 파일을 열 수 없습니다: {ex.Message}\n위치: {_updateUrl}", Theme.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
     // ───────────────────────── 공통 ─────────────────────────
 
     private Conversation GetConversation(string key, string title)
@@ -1243,15 +1959,93 @@ public sealed class MainForm : Form
 
     private void WireWindow(ChatWindow window)
     {
+        window.SetViewOptions(_me.EmployeeNo, CanDelete, CanEdit);
+        window.TypingActivity += SendTypingActivity;
+        window.OlderHistoryRequested += RequestOlderHistory;
         window.FileCommandRequested += OnFileCommand;
+        window.RoomFilesRequested += OpenRoomFiles;
+        window.ReactionRequested += (_, item, emoji) =>
+            _client.Send(Packet.Create(PacketType.Reaction).WithData(new ReactionRequest { MessageId = item.MessageId, Emoji = emoji }));
+        window.DeleteRequested += (w, item) =>
+        {
+            string who = item.Kind == ChatItemKind.Mine ? "" : $"{item.Sender}님의 ";
+            if (MessageBox.Show(w, $"{who}메시지를 삭제할까요?\n대화에 참여한 모든 사람의 화면에서 \"삭제된 메시지입니다.\"로 바뀝니다.", "메시지 삭제",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                _client.Send(Packet.Create(PacketType.MessageDelete).WithData(new MessageRef { MessageId = item.MessageId }));
+        };
+        window.EditRequested += EditMessage;
         window.ReadAll += w =>
         {
             _lastActiveWindow = w;
+            MarkRead(w.Conversation);
             if (w.Conversation.Unread == 0) return;
             w.Conversation.Unread = 0;
             RefreshUserList();
             RefreshRoomList();
         };
+    }
+
+    private void SendTypingActivity(ChatWindow window, bool isTyping)
+    {
+        if (!_connected) return;
+        var request = new TypingRequest { IsTyping = isTyping };
+        if (window.Kind == ChatWindowKind.Room && TryGetRoomId(window.Conversation, out int roomId))
+            request.RoomId = roomId;
+        else if (window.Kind == ChatWindowKind.Direct && window.Conversation.Key.StartsWith("dm:"))
+            request.PeerNo = window.Conversation.Key["dm:".Length..];
+        else return;
+        _client.Send(Packet.Create(PacketType.Typing).WithData(request));
+    }
+
+    private void RequestOlderHistory(ChatWindow window)
+    {
+        Conversation conv = window.Conversation;
+        if (!_connected || conv.HistoryLoading || !conv.HistoryHasMore) return;
+        ChatItem? oldest = conv.Items.FirstOrDefault(item => !item.IsSystemLike && (item.MessageId > 0 || item.File is { State: FileState.Ready }));
+        if (oldest is null) { conv.HistoryHasMore = false; return; }
+        string beforeKey = oldest.File is ChatFile oldFile
+            ? "F:" + oldFile.Info.FileId
+            : "M:" + oldest.MessageId.ToString("D20", System.Globalization.CultureInfo.InvariantCulture);
+        var request = new HistoryRequest { Before = oldest.Time, BeforeKey = beforeKey };
+        if (window.Kind == ChatWindowKind.Room && int.TryParse(conv.Key["room:".Length..], out int roomId))
+            request.RoomId = roomId;
+        else if (window.Kind == ChatWindowKind.Direct)
+            request.PeerNo = conv.Key["dm:".Length..];
+        else return;
+
+        conv.HistoryLoading = true;
+        conv.LoadingOlderHistory = true;
+        conv.PendingHistory.Clear();
+        if (!_client.Send(Packet.Create(PacketType.HistoryReq).WithData(request)))
+        {
+            conv.HistoryLoading = false;
+            conv.LoadingOlderHistory = false;
+        }
+    }
+
+    /// <summary>삭제 메뉴를 보여 줄지: 내가 보낸 지 24시간 안의 메시지, 관리자는 모든 메시지 (최종 판단은 서버).</summary>
+    private bool CanDelete(ChatItem item)
+        => item.CanInteract && (_me.IsAdmin || (item.Kind == ChatItemKind.Mine && DateTime.UtcNow - item.Time < TimeSpan.FromHours(24)));
+
+    private bool CanEdit(ChatItem item)
+        => item.CanInteract && item.Kind == ChatItemKind.Mine && DateTime.UtcNow - item.Time <= TimeSpan.FromMinutes(5);
+
+    private void EditMessage(ChatWindow window, ChatItem item)
+    {
+        if (!CanEdit(item)) return;
+        using var form = new MessageEditForm(item.Text);
+        if (form.ShowDialog(window) != DialogResult.OK || form.EditedText.Length == 0 || form.EditedText == item.Text) return;
+        _client.Send(Packet.Create(PacketType.MessageEditReq)
+            .WithData(new EditMessageRequest { MessageId = item.MessageId, Text = form.EditedText }));
+    }
+
+    /// <summary>글 보내기 (방: ChatMsg + 방 번호, 1:1: Whisper + 상대 사원번호). 답장이면 원래 메시지 번호를 붙인다.</summary>
+    private void SendText(PacketType type, string text, string target, long? replyId)
+    {
+        Packet packet = Packet.Create(type, body: text, target: target);
+        // 서버는 번호만 보고 원래 메시지를 직접 찾아 요약을 붙인다(클라이언트가 보낸 요약은 믿지 않는다)
+        if (replyId is long id && id > 0) packet.ReplyTo = new ReplyInfo { MessageId = id };
+        _client.Send(packet);
     }
 
     private IEnumerable<ChatWindow> OpenWindows()
@@ -1295,6 +2089,33 @@ public sealed class MainForm : Form
                 });
             }
         }
+        // 접속하지 않은 사람과의 1:1 (안 읽은 메시지가 있거나 이번에 대화한 사람) → 목록 아래에 따로
+        var onlineNos = others.Select(u => u.EmployeeNo).ToHashSet();
+        var offline = _conversations.Values
+            .Where(c => c.Key.StartsWith("dm:") && !onlineNos.Contains(c.Key["dm:".Length..]) && (c.Unread > 0 || c.Items.Count > 0))
+            .Select(c => (Conv: c, User: KnownPeer(c.Key["dm:".Length..], c.Title)))
+            .OrderByDescending(x => x.Conv.Unread).ThenBy(x => x.User.Name).ToList();
+        if (offline.Count > 0)
+        {
+            items.Add(new CardItem { IsHeader = true, Key = "dept:~offline", Title = $"접속하지 않음 · 대화 중 ({offline.Count})" });
+            foreach (var (conv, user) in offline)
+            {
+                items.Add(new CardItem
+                {
+                    Key = $"user:{user.EmployeeNo}",
+                    Title = user.DisplayName,
+                    Subtitle = conv.Unread > 0 ? "안 읽은 메시지가 있어요" : "접속하지 않음 · 메시지는 다음 접속 때 전달",
+                    StatusColor = Theme.Offline,
+                    AvatarText = user.Name,
+                    AvatarColor = Theme.AvatarColor(user.EmployeeNo),
+                    ShowStatus = true,
+                    Online = false,
+                    Badge = conv.Unread > 0 ? conv.Unread.ToString() : null,
+                    BadgeAlert = conv.Unread > 0,
+                    Tag = user,
+                });
+            }
+        }
         _userList.SetItems(items);
         _usersTab.Text = $"동료 {others.Count}";
         UpdateTrayText();
@@ -1329,6 +2150,30 @@ public sealed class MainForm : Form
     // [왜] 이모지(자물쇠) 대신 글자: WinForms Label(GDI)은 컬러 이모지를 그리지 못해 PC에 따라 네모(□)로 보일 수 있다.
     private string ConnectedStatusText() =>
         $"{(_client.IsEncrypted ? "암호화 연결됨" : "연결됨(암호화 안 됨)")} · {_client.Host}:{_client.Port}";
+
+    // [주의] 메뉴·타이머·메뉴 그림은 컨트롤 트리에 없어 창과 함께 해제되지 않는다.
+    //        로그아웃 → 다시 로그인을 반복하면 그만큼 윈도우 핸들이 쌓이므로 직접 정리한다.
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _idleTimer.Dispose();
+            _rejoinTimer.Dispose();
+            foreach (ContextMenuStrip? menu in new[] { _statusMenu, _trayMenu })
+            {
+                if (menu is null) continue;
+                foreach (ToolStripItem item in menu.Items)
+                {
+                    if (item is ToolStripMenuItem m)
+                        foreach (ToolStripItem sub in m.DropDownItems) sub.Image?.Dispose();
+                    item.Image?.Dispose();
+                }
+                menu.Dispose();
+            }
+            Icon?.Dispose();
+        }
+        base.Dispose(disposing);
+    }
 
     private void SetStatus(string text, Color color)
     {

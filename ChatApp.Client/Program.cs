@@ -30,22 +30,33 @@ internal static class Program
 
         var settings = ClientSettings.Load();
 
-        // [개념] using var: 이 변수가 범위(Main)를 벗어날 때 자동으로 Dispose()를 불러 준다.
-        //   ChatClient.Dispose()는 서버에 로그아웃을 알리고 연결을 닫으므로, 프로그램이 끝날 때 연결이 깔끔하게 정리된다.
-        using var client = new ChatClient();
+        // [주의] UI 스레드에서 처리하지 못한 예외가 나도 프로그램이 조용히 꺼지지 않게, 알려 주고 계속 실행한다.
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) =>
+            MessageBox.Show($"예상하지 못한 오류가 발생했습니다.\n{e.Exception.Message}", "사내톡", MessageBoxButtons.OK, MessageBoxIcon.Error);
 
-        // [개념] ShowDialog(모달 창): 이 창이 닫힐 때까지 다음 줄로 넘어가지 않고 기다린다(그동안 다른 창 조작 불가).
-        //   창이 닫히면 DialogResult(OK/Cancel 등)를 돌려줘서 "사용자가 로그인에 성공했는지" 알 수 있다.
-        using (var login = new LoginForm(client, settings))
+        // 로그아웃하면 로그인 창으로 돌아온다 (프로그램을 다시 켜지 않아도 다른 계정으로 바꿀 수 있다)
+        while (true)
         {
-            if (login.ShowDialog() != DialogResult.OK || client.Me is null)
-                return; // 로그인하지 않고 창을 닫음
-        }
+            // [개념] using var: 이 변수가 범위를 벗어날 때 자동으로 Dispose()를 불러 준다.
+            //   ChatClient.Dispose()는 서버에 로그아웃을 알리고 연결을 닫으므로, 연결이 깔끔하게 정리된다.
+            using var client = new ChatClient();
 
-        // [개념] Application.Run(form): "메시지 루프"를 시작한다.
-        //   윈도우는 클릭·키 입력·다시 그리기 요청을 "메시지"로 UI 스레드의 큐에 넣고, 메시지 루프가 하나씩 꺼내 처리한다.
-        //   이 메인 창이 닫히면 루프가 끝나고 Run이 돌아오며 프로그램이 종료된다.
-        // [스레드] 다른 스레드가 BeginInvoke로 넘긴 작업도 이 메시지 큐에 들어가 UI 스레드에서 실행된다.
-        Application.Run(new MainForm(client));
+            // [개념] ShowDialog(모달 창): 이 창이 닫힐 때까지 다음 줄로 넘어가지 않고 기다린다(그동안 다른 창 조작 불가).
+            //   창이 닫히면 DialogResult(OK/Cancel 등)를 돌려줘서 "사용자가 로그인에 성공했는지" 알 수 있다.
+            using (var login = new LoginForm(client, settings))
+            {
+                if (login.ShowDialog() != DialogResult.OK || client.Me is null)
+                    return; // 로그인하지 않고 창을 닫음
+            }
+
+            // [개념] Application.Run(form): "메시지 루프"를 시작한다.
+            //   윈도우는 클릭·키 입력·다시 그리기 요청을 "메시지"로 UI 스레드의 큐에 넣고, 메시지 루프가 하나씩 꺼내 처리한다.
+            //   이 메인 창이 닫히면 루프가 끝나고 Run이 돌아온다.
+            // [스레드] 다른 스레드가 BeginInvoke로 넘긴 작업도 이 메시지 큐에 들어가 UI 스레드에서 실행된다.
+            using var main = new MainForm(client, settings);
+            Application.Run(main);
+            if (!main.LogoutRequested) return; // 트레이 "종료" → 프로그램 끝
+        }
     }
 }

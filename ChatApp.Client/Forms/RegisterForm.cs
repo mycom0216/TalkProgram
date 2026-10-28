@@ -145,6 +145,7 @@ public sealed class RegisterForm : Form
 
         var request = new RegisterRequest
         {
+            ProtocolVersion = ProtocolInfo.Version,
             EmployeeNo = _employeeNo.Text.Trim(),
             Email = $"{_emailId.Text.Trim()}@{_emailDomain.Text.Trim().TrimStart('@')}",
             Name = _name.Text.Trim(),

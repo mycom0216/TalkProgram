@@ -64,7 +64,7 @@ public sealed class AuditRepository(Db db)
         {
             list.Add(new AuditEntry
             {
-                Time = r.GetDateTime(0),
+                Time = Db.AsUtc(r.GetDateTime(0)),
                 ActorNo = r.IsDBNull(1) ? null : r.GetString(1),
                 Action = r.GetString(2),
                 TargetNo = r.IsDBNull(3) ? null : r.GetString(3),

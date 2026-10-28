@@ -20,7 +20,7 @@ namespace ChatApp.Server.Services;
 public sealed record AdminOutcome(bool Success, string Message, string? TempPassword = null);
 
 public sealed class AdminService(UserRepository users, AuditRepository auditRepository, AuthService auth,
-                                 SessionManager sessions, AuditLog audit, ServerLogger log)
+                                 SessionManager sessions, AuditLog audit, ServerLogger log, Db? db = null)
 {
     /// <summary>서버 콘솔에서 한 동작의 "행위자" 이름.</summary>
     public const string ConsoleActor = "CONSOLE";
@@ -41,6 +41,30 @@ public sealed class AdminService(UserRepository users, AuditRepository auditRepo
 
     /// <summary>감사 로그 검색 (최근 것부터).</summary>
     public List<AuditEntry> QueryAudit(AuditQuery query) => auditRepository.Query(query);
+
+    public AdminStats GetStats()
+    {
+        if (db is null) throw new InvalidOperationException("관리 통계용 DB가 연결되지 않았습니다.");
+        using var conn = db.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT (SELECT COUNT(*) FROM users WHERE status = 'ACTIVE'),
+                   (SELECT COUNT(*) FROM users WHERE status = 'PENDING'),
+                   (SELECT COUNT(*) FROM users WHERE status = 'SUSPENDED'),
+                   (SELECT COUNT(*) FROM rooms WHERE closed_at IS NULL),
+                   (SELECT COUNT(*) FROM messages),
+                   (SELECT COUNT(*) FROM files WHERE status = 'DONE'),
+                   (SELECT COALESCE(SUM(file_size), 0) FROM files WHERE status = 'DONE')
+            """;
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) throw new InvalidOperationException("관리 통계를 읽지 못했습니다.");
+        return new AdminStats
+        {
+            ActiveUsers = Convert.ToInt32(reader.GetValue(0)), PendingUsers = Convert.ToInt32(reader.GetValue(1)), SuspendedUsers = Convert.ToInt32(reader.GetValue(2)),
+            OnlineUsers = sessions.GetUsers().Count, OpenRooms = Convert.ToInt32(reader.GetValue(3)), Messages = Convert.ToInt64(reader.GetValue(4)),
+            Files = Convert.ToInt64(reader.GetValue(5)), FileBytes = Convert.ToInt64(reader.GetValue(6)), CapturedAtUtc = DateTime.UtcNow,
+        };
+    }
 
     /// <summary>관리 동작 실행. actor = 관리자 사원번호 또는 ConsoleActor.</summary>
     public AdminOutcome Execute(AdminAction action, string actor, string? actorIp)
@@ -121,9 +145,10 @@ public sealed class AdminService(UserRepository users, AuditRepository auditRepo
             case AdminActionType.ResetPassword:
                 if (target.AuthSource != "LOCAL") return new(false, "사내 계정(LDAP) 사용자는 여기서 비밀번호를 바꿀 수 없습니다.");
                 string? temp = auth.ResetPassword(no);
-                return temp is null
-                    ? new(false, "비밀번호를 초기화하지 못했습니다.")
-                    : new(true, $"{name} 임시 비밀번호를 발급했습니다. 본인에게 직접 전달하세요. (다음 로그인 때 새 비밀번호로 바꿔야 합니다)", temp);
+                if (temp is null) return new(false, "비밀번호를 초기화하지 못했습니다.");
+                // [왜] 계정을 도용당해 초기화하는 경우가 많다. 지금 접속해 있는 연결(도용한 사람일 수 있음)을 끊어야 의미가 있다.
+                Disconnect(no, "관리자가 비밀번호를 초기화했습니다. 새로 받은 임시 비밀번호로 다시 로그인하세요.");
+                return new(true, $"{name} 임시 비밀번호를 발급했습니다. 본인에게 직접 전달하세요. (다음 로그인 때 새 비밀번호로 바꿔야 합니다)", temp);
 
             case AdminActionType.Kick:
                 return Disconnect(no, $"관리자가 연결을 끊었습니다.{(reason is null ? "" : $" (사유: {reason})")}")
@@ -138,7 +163,8 @@ public sealed class AdminService(UserRepository users, AuditRepository auditRepo
                 // 접속 중이면 서버 쪽 권한을 바로 바꾼다 (해제는 즉시 효과, 클라이언트 메뉴는 다음 로그인 때 바뀜)
                 if (sessions.FindByEmployeeNo(no) is { User: not null } s)
                 {
-                    s.User = s.User.WithRole(role);
+                    // [스레드] 본인이 동시에 상태를 바꿔도 권한 변경이 사라지지 않게 UpdateUser로 바꾼다
+                    s.UpdateUser(u => u.WithRole(role));
                     s.Send(Packet.Create(PacketType.SystemMsg, role == "ADMIN"
                         ? "관리자로 지정되었습니다. 다시 로그인하면 관리자 메뉴가 보입니다."
                         : "관리자 권한이 해제되었습니다."));

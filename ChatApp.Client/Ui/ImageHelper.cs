@@ -20,6 +20,8 @@ internal static class ImageHelper
 {
     // 미리보기의 긴 변 최대 픽셀. 말풍선 최대 크기(약 220~260px)보다 조금 크게 만들어 고배율 화면에서도 선명하게.
     private const int ThumbnailMaxSide = 360;
+    // 받은 미리보기로 허용하는 가장 긴 변 (만드는 쪽은 360px이므로 넉넉하게)
+    private const int MaxPreviewSide = 2048;
     // [개념] EXIF: 카메라·휴대폰이 사진 파일 안에 함께 저장하는 정보(촬영 날짜, 기종, 방향 등).
     //        0x0112는 그중 "방향(Orientation)" 항목의 번호(태그 ID)다.
     private const int ExifOrientation = 0x0112;
@@ -94,6 +96,9 @@ internal static class ImageHelper
             // [개념] MemoryStream: 바이트 배열을 파일처럼 읽을 수 있게 감싸는 스트림
             using var stream = new MemoryStream(data);
             using var image = Image.FromStream(stream);
+            // [주의] 바이트는 작아도(수십 KB) 가로·세로가 수만 픽셀인 "압축 폭탄" 그림이 올 수 있다.
+            //        그대로 복사하면 수 GB 메모리를 잡아 프로그램이 멈춘다. 미리보기는 360px이면 충분하므로 큰 것은 버린다.
+            if (image.Width is <= 0 or > MaxPreviewSide || image.Height is <= 0 or > MaxPreviewSide) return null;
             // [주의] Image.FromStream으로 만든 그림은 "스트림이 살아 있는 동안만" 안전하게 쓸 수 있다(GDI+가 나중에 다시 읽음).
             //        스트림은 using으로 곧 닫히므로, new Bitmap(image)로 픽셀을 복사한 독립된 그림을 만들어 돌려준다.
             return new Bitmap(image); // 스트림과 분리된 복사본
@@ -112,11 +117,27 @@ internal static class ImageHelper
         // %TEMP%\사내톡 폴더 (윈도우가 관리하는 임시 폴더라 나중에 정리되어도 문제없음)
         string folder = Path.Combine(Path.GetTempPath(), "사내톡");
         Directory.CreateDirectory(folder); // 이미 있으면 아무 일도 하지 않는다
-        // 파일 이름에 날짜·시각을 넣어 여러 번 캡처해도 이름이 겹치지 않게
-        string path = Path.Combine(folder, $"캡처_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+        CleanOldCaptures(folder);
+        // 파일 이름에 날짜·시각(밀리초)과 짧은 무작위 글자를 넣는다.
+        // [주의] 초 단위만 쓰면 1초 안에 두 번 붙여 넣었을 때 같은 이름이 되어, 아직 보내는 중인 첫 캡처 파일을 덮어쓴다.
+        string path = Path.Combine(folder, $"캡처_{DateTime.Now:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid().ToString("N")[..4]}.png");
         // [왜] 캡처 화면(글자·선이 많음)은 PNG(무손실)가 JPEG보다 글자가 깨지지 않는다
         image.Save(path, ImageFormat.Png);
         return path;
+    }
+
+    /// <summary>하루 넘게 지난 캡처 임시 파일을 지운다 (보내기가 끝난 지 오래된 것). 지우지 못하면(사용 중) 그냥 둔다.</summary>
+    private static void CleanOldCaptures(string folder)
+    {
+        try
+        {
+            foreach (string file in Directory.EnumerateFiles(folder, "캡처_*.png"))
+            {
+                if (DateTime.Now - File.GetLastWriteTime(file) < TimeSpan.FromDays(1)) continue;
+                try { File.Delete(file); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
     /// <summary>

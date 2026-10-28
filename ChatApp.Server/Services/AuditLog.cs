@@ -41,7 +41,7 @@ public sealed class AuditLog : IDisposable
     /// <param name="ip">접속 주소 ("IP:포트"면 IP만 남긴다)</param>
     public void Record(string action, string? actor, string? target = null, string? detail = null, string? ip = null)
     {
-        var record = new AuditRecord(DateTime.Now, actor, action, target, detail, StripPort(ip));
+        var record = new AuditRecord(DateTime.UtcNow, actor, action, target, detail, StripPort(ip));
         // [왜] TryAdd: DB가 오래 멈춰 큐가 5만 건까지 찼다면, 기다리지 않고 버리고 콘솔에 알린다.
         //      감사 기록 때문에 로그인·채팅 스레드가 멈추면 서비스 전체가 멈추기 때문이다(가용성 우선).
         bool added;

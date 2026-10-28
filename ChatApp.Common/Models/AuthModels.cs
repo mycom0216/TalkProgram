@@ -25,6 +25,11 @@ public sealed class RegisterRequest
     // [주의] 비밀번호는 패킷 안에서는 원문이다. 네트워크 구간은 TLS가 암호화하고(TlsHelper),
     //   서버는 그대로 저장하지 않고 해시(PasswordHasher)로 바꿔 저장한다.
     public string Password { get; set; } = "";
+
+    /// <summary>클라이언트의 프로토콜 버전 (ProtocolInfo.Version). 옛 클라이언트는 이 칸이 없어 0으로 온다.</summary>
+    // [주의] 기본값을 ProtocolInfo.Version으로 두면 안 된다. JSON에 칸이 없으면 기본값이 그대로 남아,
+    //   버전을 모르는 옛 클라이언트도 "최신"으로 보이게 된다. 그래서 0으로 두고 보내는 쪽이 직접 채운다.
+    public int ProtocolVersion { get; set; }
 }
 
 /// <summary>로그인 요청 (클라이언트 → 서버, Packet.Data).</summary>
@@ -32,6 +37,19 @@ public sealed class LoginRequest
 {
     public string EmployeeNo { get; set; } = "";
     public string Password { get; set; } = "";
+    public string DeviceId { get; set; } = "";
+
+    /// <summary>클라이언트의 프로토콜 버전 (RegisterRequest와 같은 이유로 기본값 0).</summary>
+    public int ProtocolVersion { get; set; }
+}
+
+/// <summary>비밀번호 대신 서버 발급 토큰으로 로그인한다.</summary>
+public sealed class TokenLoginRequest
+{
+    public string EmployeeNo { get; set; } = "";
+    public string Token { get; set; } = "";
+    public string DeviceId { get; set; } = "";
+    public int ProtocolVersion { get; set; }
 }
 
 /// <summary>

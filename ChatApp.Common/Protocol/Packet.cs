@@ -54,7 +54,15 @@ public sealed class Packet
     public bool Success { get; set; } = true;
 
     /// <summary>패킷을 만든 시각. 서버가 채팅을 보낼 때 정한 시각이 화면의 "16:19" 같은 시간 표시가 된다.</summary>
-    public DateTime Timestamp { get; set; } = DateTime.Now;
+    public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+
+    /// <summary>채팅·귓속말의 메시지 번호 (서버가 붙인다). 답장·삭제·공감이 이 번호로 메시지를 가리킨다. 0 = 없음.</summary>
+    // [개념] 이 칸만 0이면 JSON에서 뺀다(대부분의 패킷은 메시지 번호가 없다). 초기값도 0이라 읽을 때 문제없다.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public long MessageId { get; set; }
+
+    /// <summary>답장이면 원래 메시지 요약 (보낼 때는 MessageId만 채우면 서버가 이름·내용을 채운다).</summary>
+    public ChatApp.Common.Models.ReplyInfo? ReplyTo { get; set; }
 
     /// <summary>바이너리 데이터(파일 조각). JSON에서는 Base64 문자열로 바뀐다. 없으면 JSON에 아예 넣지 않는다.</summary>
     // [개념] Base64: 바이트(0~255 아무 값)를 A~Z, a~z, 0~9, +, / 64개 글자로만 표현하는 방법.

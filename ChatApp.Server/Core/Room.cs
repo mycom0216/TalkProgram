@@ -3,54 +3,70 @@ using ChatApp.Common.Models;
 namespace ChatApp.Server.Core;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// [파일 역할] 채팅방 1개의 데이터(번호, 이름, 방장, 최대 인원, 현재 멤버).
-//            스스로는 아무 동작도 하지 않는 "데이터 상자"이고, 입장/퇴장 같은 규칙은 RoomManager가 처리한다.
-// [스레드]   여러 세션 스레드가 동시에 같은 방에 접근하므로, 바뀌는 값(Members)은
-//            반드시 RoomManager의 lock 안에서만 만진다. 바뀌지 않는 값(Id, Name 등)은 아무 스레드나 읽어도 안전.
-// [연결]     RoomManager가 만들고 보관 / ClientSession.JoinedRooms가 참조 / ToInfo()로 클라이언트에 보낼 RoomInfo 생성.
+// [파일 역할] 채팅방 하나의 상태.
+// [핵심] 멤버(Members)와 접속 중인 연결(Online)을 따로 관리한다.
+//        - Members: 이 방의 멤버 (카카오톡 단체방처럼 접속을 끊어도 멤버로 남는다). DB room_members와 같다.
+//        - Online : 지금 접속해 있는 멤버들의 연결. 실시간 메시지는 여기로 보낸다.
+//        기본 방("전체 채팅")은 예외: 멤버 목록 없이 로그인한 모두가 Online에 들어간다.
+// [스레드] 모든 필드는 RoomManager의 lock 안에서만 읽고 쓴다. (이 클래스 자체에는 lock이 없다)
+// [연결]   RoomManager가 만들고 보관 / ClientSession.JoinedRooms가 참조 / ToInfo()로 클라이언트에 보낼 RoomInfo를 만든다.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// <summary>
-/// 채팅방 하나. 멤버 목록(Members)은 RoomManager의 lock 안에서만 읽고 쓴다.
-/// </summary>
-// [개념] 기본 생성자(primary constructor, C# 12): 클래스 이름 옆 괄호(id, name, ...)가 곧 생성자 매개변수다.
-//        아래 속성 초기값(= id 등)에서 바로 쓸 수 있어, 생성자 본문을 따로 쓰지 않아도 된다.
-public sealed class Room(int id, string name, UserInfo? owner, int maxUsers)
+/// <summary>방 멤버 한 명의 상태 (읽음 위치 포함).</summary>
+public sealed class RoomMember(string employeeNo, string displayName, DateTime joinedAt, DateTime? lastReadAt)
 {
-    // [왜] { get; }만 있는 속성 = 만든 뒤 바꿀 수 없음(불변). 불변 값은 여러 스레드가 동시에 읽어도 lock이 필요 없다.
+    public string EmployeeNo { get; } = employeeNo;
+    public string DisplayName { get; set; } = displayName;
+    public DateTime JoinedAt { get; } = joinedAt;
+    public DateTime? LastReadAt { get; set; } = lastReadAt;
+
+    public RoomMemberInfo ToInfo() => new()
+    {
+        EmployeeNo = EmployeeNo, DisplayName = DisplayName, JoinedAt = JoinedAt, LastReadAt = LastReadAt,
+    };
+}
+
+public sealed class Room(int id, string name, string? ownerNo, string? ownerName, int maxUsers, bool isPrivate)
+{
     public int Id { get; } = id;
     public string Name { get; } = name;
 
-    /// <summary>방장. 기본 방("전체 채팅")은 방장이 없어서 null.</summary>
-    // [개념] UserInfo? 의 '?' = null이 될 수 있음을 표시(nullable 참조 형식). 컴파일러가 null 검사를 빠뜨리면 경고해 준다.
-    public UserInfo? Owner { get; } = owner;
+    /// <summary>방장 (처음엔 만든 사람, 위임하면 바뀐다. 기본 방은 null). RoomManager의 lock 안에서만 바꾼다.</summary>
+    public string? OwnerNo { get; internal set; } = ownerNo;
+    public string? OwnerName { get; internal set; } = ownerName;
+    public string PinnedNotice { get; internal set; } = "";
 
-    /// <summary>0이면 제한 없음(기본 방).</summary>
+    /// <summary>최대 인원 (0 = 제한 없음). 멤버 수 기준.</summary>
     public int MaxUsers { get; } = maxUsers;
 
-    /// <summary>현재 멤버. RoomManager._lock 안에서만 접근.</summary>
-    // [개념] HashSet: 중복을 허용하지 않는 집합. "이미 들어있나?"(Contains) 확인과 추가/삭제가 평균 O(1)로 빠르다.
-    // [주의] HashSet은 스레드 안전하지 않다. 두 스레드가 동시에 Add하면 내부 구조가 깨질 수 있어서 lock이 필수.
-    // [개념] internal: 같은 프로젝트(ChatApp.Server) 안에서만 보인다. 외부에서 멤버 목록을 함부로 못 만지게 한다.
-    // [개념] = [] : 컬렉션 식(C# 12). new HashSet<ClientSession>()과 같은 뜻.
-    internal HashSet<ClientSession> Members { get; } = [];
+    /// <summary>비공개 방: 목록에는 멤버에게만 보이고, 초대로만 들어올 수 있다.</summary>
+    public bool IsPrivate { get; } = isPrivate;
 
-    /// <summary>기본 방(1번, "전체 채팅")인지. 기본 방은 나갈 수 없고 삭제되지 않는다.</summary>
+    /// <summary>멤버 (사원번호 → 상태). 기본 방은 비어 있다.</summary>
+    internal Dictionary<string, RoomMember> Members { get; } = [];
+
+    /// <summary>지금 접속해서 이 방에 연결된 세션들.</summary>
+    internal HashSet<ClientSession> Online { get; } = [];
+
     public bool IsLobby => Id == RoomInfo.LobbyId;
 
-    /// <summary>꽉 찼는지. Members.Count를 읽으므로 lock 안에서만 의미가 있다.</summary>
-    internal bool IsFull => MaxUsers > 0 && Members.Count >= MaxUsers;
+    internal bool IsFull => !IsLobby && MaxUsers > 0 && Members.Count >= MaxUsers;
 
-    /// <summary>RoomManager._lock 안에서 호출해야 인원수가 정확하다.</summary>
-    // [왜] Room 객체를 그대로 보내지 않고 RoomInfo(전송용 데이터)로 바꿔 보낸다.
-    //      Room에는 ClientSession(소켓 등) 같은 서버 내부 정보가 있어서 JSON으로 보낼 수도 없고 보내서도 안 된다.
-    internal RoomInfo ToInfo() => new()
+    internal bool IsMember(string employeeNo) => IsLobby || Members.ContainsKey(employeeNo);
+
+    /// <param name="withMembers">true면 멤버 목록·읽음 위치를 함께 담는다 (입장 결과·방 변경 알림용).</param>
+    internal RoomInfo ToInfo(bool withMembers = false) => new()
     {
         RoomId = Id,
         Name = Name,
-        OwnerNo = Owner?.EmployeeNo,        // [개념] ?. : Owner가 null이면 null, 아니면 .EmployeeNo (null 조건 연산자)
-        OwnerName = Owner?.DisplayName,
+        OwnerNo = OwnerNo,
+        OwnerName = OwnerName,
+        PinnedNotice = PinnedNotice,
         MaxUsers = MaxUsers,
-        MemberCount = Members.Count,
+        IsPrivate = IsPrivate,
+        // 기본 방은 멤버 목록이 없으므로 "지금 접속한 사람 수"를 인원으로 보여 준다
+        MemberCount = IsLobby ? Online.Count : Members.Count,
+        OnlineCount = Online.Count,
+        Members = withMembers && !IsLobby ? Members.Values.OrderBy(m => m.DisplayName).Select(m => m.ToInfo()).ToList() : null,
     };
 }

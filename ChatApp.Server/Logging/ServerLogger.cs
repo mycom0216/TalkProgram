@@ -16,7 +16,11 @@ public sealed class ServerLogger : IDisposable
     public ServerLogger(string filePath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        _file = new StreamWriter(filePath, append: true) { AutoFlush = true };
+        // [왜] FileShare.ReadWrite: 서버가 돌고 있는 동안에도 메모장으로 로그를 열어 볼 수 있고,
+        //      실수로 서버를 하나 더 켜도 "파일을 다른 프로세스가 사용 중" 예외로 바로 죽지 않는다.
+        //      (두 번째 서버는 포트가 이미 쓰이고 있다는 안내를 남기고 스스로 끝난다 → Program.cs)
+        var stream = new FileStream(filePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+        _file = new StreamWriter(stream) { AutoFlush = true };
 
         _thread = new Thread(Run) { IsBackground = true, Name = "Logger" };
         _thread.Start();
@@ -28,7 +32,7 @@ public sealed class ServerLogger : IDisposable
     private void Write(string level, string message)
     {
         // 어느 스레드에서 찍힌 로그인지 보이게 스레드 ID를 함께 남긴다(멀티스레드 디버깅에 유용).
-        string line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{level,-5}] [T{Environment.CurrentManagedThreadId,2}] {message}";
+        string line = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC] [{level,-5}] [T{Environment.CurrentManagedThreadId,2}] {message}";
         try
         {
             _queue.Add(line);

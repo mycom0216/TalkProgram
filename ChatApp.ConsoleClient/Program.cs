@@ -271,6 +271,7 @@ UserInfo? Login()
     {
         EmployeeNo = Ask("사원번호: "),
         Password = AskPassword("비밀번호: "),
+        ProtocolVersion = ProtocolInfo.Version,
     };
     Send(Packet.Create(PacketType.LoginReq).WithData(req));
 
@@ -294,6 +295,7 @@ void Register()
         Name = Ask("이름: "),
         Department = Ask("부서: "),
         Position = Ask("직급: "),
+        ProtocolVersion = ProtocolInfo.Version,
     };
 
     string password = AskPassword("비밀번호 (영문+숫자 8자 이상): ");

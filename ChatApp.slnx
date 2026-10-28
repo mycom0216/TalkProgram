@@ -4,4 +4,7 @@
   <Project Path="ChatApp.Client/ChatApp.Client.csproj" />
   <Project Path="ChatApp.ConsoleClient/ChatApp.ConsoleClient.csproj" />
   <Project Path="ChatApp.LoadTest/ChatApp.LoadTest.csproj" />
+  <Project Path="ChatApp.Tests/ChatApp.Tests.csproj" />
+  <Project Path="ChatApp.UiTests/ChatApp.UiTests.csproj" />
+  <Project Path="ChatApp.Service/ChatApp.Service.csproj" />
 </Solution>

@@ -68,7 +68,7 @@ public sealed class FileRepository(Db db)
         // 시각은 DB 서버 시계(CURRENT_TIMESTAMP)가 아니라 채팅 메시지와 같은 C# 서버 시계를 쓴다.
         // (DB와 채팅 서버의 시간대가 다르면 기록을 시간순으로 합칠 때 순서가 뒤섞이기 때문)
         cmd.CommandText = "UPDATE files SET status = 'DONE', created_at = @now WHERE file_id = @id";
-        DateTime now = DateTime.Now;
+        DateTime now = DateTime.UtcNow;
         cmd.AddParam("@now", new DateTime(now.Ticks - now.Ticks % TimeSpan.TicksPerMillisecond));
         cmd.AddParam("@id", fileId);
         cmd.ExecuteNonQuery();
@@ -105,5 +105,48 @@ public sealed class FileRepository(Db db)
             Kind: Enum.TryParse(r.GetString(6), ignoreCase: true, out FileKind kind) ? kind : FileKind.File,
             StoredPath: r.GetString(7),
             Done: r.GetString(8) == "DONE");
+    }
+
+    /// <summary>방 파일 보관함 페이지. 조회 SQL에서 방 멤버십과 가입 시각을 함께 검증한다.</summary>
+    public (List<SharedFile> Files, bool HasMore) LoadRoomGallery(string employeeNo, int roomId, DateTime? before,
+        string? beforeFileId, int pageSize = 50)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT f.file_id, f.file_name, f.file_size, f.file_kind, f.room_id, f.sender_no,
+                   COALESCE(CONCAT(u.name, ' ', u.position), f.sender_no), f.created_at
+            FROM files f
+            LEFT JOIN room_members rm ON rm.room_id = f.room_id AND rm.employee_no = @employee
+            LEFT JOIN users u ON u.employee_no = f.sender_no
+            WHERE f.room_id = @room AND f.status = 'DONE'
+              AND (f.room_id = @lobby OR (rm.employee_no IS NOT NULL AND f.created_at >= rm.joined_at))
+              AND (@before IS NULL OR f.created_at < @before OR (f.created_at = @before AND f.file_id < @before_id))
+            ORDER BY f.created_at DESC, f.file_id DESC
+            LIMIT @limit
+            """;
+        cmd.AddParam("@employee", employeeNo);
+        cmd.AddParam("@room", roomId);
+        cmd.AddParam("@lobby", RoomInfo.LobbyId);
+        cmd.AddParam("@before", before);
+        cmd.AddParam("@before_id", beforeFileId);
+        cmd.AddParam("@limit", pageSize + 1);
+        var files = new List<SharedFile>(pageSize + 1);
+        using (DbDataReader r = cmd.ExecuteReader())
+        {
+            while (r.Read())
+            {
+                files.Add(new SharedFile
+                {
+                    FileId = r.GetString(0), FileName = r.GetString(1), Size = Convert.ToInt64(r.GetValue(2)),
+                    Kind = Enum.TryParse(r.GetString(3), true, out FileKind kind) ? kind : FileKind.File,
+                    RoomId = Convert.ToInt32(r.GetValue(4)), SenderNo = r.GetString(5), SenderName = r.GetString(6),
+                    SentAt = Db.AsUtc(r.GetDateTime(7)),
+                });
+            }
+        }
+        bool hasMore = files.Count > pageSize;
+        if (hasMore) files.RemoveAt(files.Count - 1);
+        return (files, hasMore);
     }
 }

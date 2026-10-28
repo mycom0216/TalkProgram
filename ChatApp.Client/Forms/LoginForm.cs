@@ -27,6 +27,7 @@ public sealed class LoginForm : Form
     private readonly TextBox _host = new();
     private readonly TextBox _port = new();
     private readonly CheckBox _remember = new() { Text = "사원번호 기억하기", AutoSize = true };
+    private readonly CheckBox _autoLogin = new() { Text = "자동 로그인 (이 기기에서)", AutoSize = true };
     private readonly CheckBox _useTls = new() { Text = "보안 연결(TLS) 사용", AutoSize = true };
     private readonly Button _loginButton = new();
     private readonly LinkLabel _registerLink = new() { Text = "회원가입", AutoSize = true };
@@ -35,6 +36,9 @@ public sealed class LoginForm : Form
     private readonly TableLayoutPanel _serverPanel = new();
 
     private int S(int v) => LogicalToDeviceUnits(v);
+
+    // [왜] 입력칸마다 new Font를 만들면 창을 닫아도 GDI 글꼴이 남는다(로그아웃·재로그인 때마다 쌓임). 하나를 함께 쓴다.
+    private static readonly Font InputFont = new(Theme.Body.FontFamily, 11F);
 
     public LoginForm(ChatClient client, ClientSettings settings)
     {
@@ -57,6 +61,7 @@ public sealed class LoginForm : Form
         _remember.Checked = settings.RememberEmployeeNo;
         _useTls.Checked = settings.UseTls;
         if (settings.RememberEmployeeNo) _employeeNo.Text = settings.LastEmployeeNo;
+        _autoLogin.Checked = settings.GetLoginToken(settings.Host, settings.Port, settings.LastEmployeeNo) is not null;
 
         AcceptButton = _loginButton; // Enter = 로그인
         _loginButton.Click += OnLoginClick;
@@ -64,14 +69,32 @@ public sealed class LoginForm : Form
         _serverLink.LinkClicked += (_, _) => ToggleServerPanel();
 
         _client.PacketReceived += OnPacketReceived;
-        FormClosed += (_, _) => _client.PacketReceived -= OnPacketReceived;
-        Shown += (_, _) => (_employeeNo.Text.Length == 0 ? _employeeNo : _password).Focus();
+        _client.Disconnected += OnDisconnected;
+        FormClosed += (_, _) =>
+        {
+            _client.PacketReceived -= OnPacketReceived;
+            _client.Disconnected -= OnDisconnected;
+        };
+        Shown += (_, _) =>
+        {
+            if (_autoLogin.Checked && _employeeNo.TextLength > 0) BeginInvoke(new Action(() => OnLoginClick(this, EventArgs.Empty)));
+            else (_employeeNo.Text.Length == 0 ? _employeeNo : _password).Focus();
+        };
     }
 
     // ───────── 화면 구성 ─────────
 
     private void BuildLayout()
     {
+        _employeeNo.Name = "EmployeeNo";
+        _password.Name = "Password";
+        _host.Name = "ServerHost";
+        _port.Name = "ServerPort";
+        _remember.Name = "RememberEmployeeNo";
+        _autoLogin.Name = "AutoLogin";
+        _useTls.Name = "UseTls";
+        _loginButton.Name = "LoginButton";
+        _status.Name = "LoginStatus";
         int width = S(340);
         int fieldWidth = width - S(64);
 
@@ -99,6 +122,10 @@ public sealed class LoginForm : Form
         _remember.Font = Theme.Small;
         _remember.Margin = new Padding(0, S(8), 0, 0);
         body.Controls.Add(_remember);
+        _autoLogin.ForeColor = Theme.SubText;
+        _autoLogin.Font = Theme.Small;
+        _autoLogin.Margin = new Padding(0, S(5), 0, 0);
+        body.Controls.Add(_autoLogin);
 
         _loginButton.Text = "로그인";
         _loginButton.FlatStyle = FlatStyle.Flat;
@@ -162,7 +189,7 @@ public sealed class LoginForm : Form
 
     private void AddInput(TableLayoutPanel body, TextBox box, int width)
     {
-        box.Font = new Font(Theme.Body.FontFamily, 11F);
+        box.Font = InputFont;
         box.BorderStyle = BorderStyle.FixedSingle;
         box.Width = width;
         box.Margin = new Padding(0);
@@ -211,11 +238,24 @@ public sealed class LoginForm : Form
     private async void OnLoginClick(object? sender, EventArgs e)
     {
         string no = _employeeNo.Text.Trim();
-        if (no.Length == 0 || _password.Text.Length == 0)
+        if (no.Length == 0)
         {
-            ShowStatus("사원번호와 비밀번호를 입력하세요.", error: true);
+            ShowStatus("사원번호를 입력하세요.", error: true);
             return;
         }
+        int.TryParse(_port.Text.Trim(), out int selectedPort);
+        string host = _host.Text.Trim();
+        string? rememberedToken = _autoLogin.Checked ? _settings.GetLoginToken(host, selectedPort, no) : null;
+        bool usingToken = !string.IsNullOrEmpty(rememberedToken);
+        if (!usingToken && _password.Text.Length == 0) { ShowStatus("비밀번호를 입력하거나 자동 로그인을 선택하세요.", error: true); return; }
+
+        // 암호화하지 않고 접속하면 비밀번호가 네트워크에 그대로 보인다 → 한 번 더 확인 (같은 PC 테스트 서버는 묻지 않음)
+        if (!_useTls.Checked && !IsLocalHost(host) &&
+            MessageBox.Show(this,
+                "보안 연결(TLS)을 끄고 접속하면 비밀번호와 대화 내용이 암호화되지 않고 전송됩니다.\n" +
+                "같은 네트워크의 누군가가 엿볼 수 있습니다. 테스트 서버가 아니라면 TLS를 켜세요.\n\n그래도 암호화 없이 로그인할까요?",
+                "암호화되지 않은 연결", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
 
         SetBusy(true, "로그인 중...");
         if (!await EnsureConnectedAsync())
@@ -224,9 +264,22 @@ public sealed class LoginForm : Form
             return;
         }
 
-        var request = new LoginRequest { EmployeeNo = no, Password = _password.Text };
-        _pendingLogin = request;
-        if (!_client.Send(Packet.Create(PacketType.LoginReq).WithData(request)))
+        Packet loginPacket;
+        if (usingToken)
+        {
+            if (!_useTls.Checked) { SetBusy(false); ShowStatus("자동 로그인 토큰을 보호하려면 TLS 보안 연결을 켜세요.", error: true); return; }
+            _pendingLogin = null;
+            _tokenLoginPending = true;
+            loginPacket = Packet.Create(PacketType.TokenLoginReq).WithData(new TokenLoginRequest { EmployeeNo = no, Token = rememberedToken!, DeviceId = _settings.DeviceId, ProtocolVersion = ProtocolInfo.Version });
+        }
+        else
+        {
+            _tokenLoginPending = false;
+            _client.LastTokenLogin = null;
+            _pendingLogin = new LoginRequest { EmployeeNo = no, Password = _password.Text, DeviceId = _settings.DeviceId, ProtocolVersion = ProtocolInfo.Version };
+            loginPacket = Packet.Create(PacketType.LoginReq).WithData(_pendingLogin);
+        }
+        if (!_client.Send(loginPacket))
         {
             SetBusy(false);
             ShowStatus("서버와 연결이 끊어졌습니다. 다시 시도하세요.", error: true);
@@ -301,7 +354,8 @@ public sealed class LoginForm : Form
 
         _settings.Host = host;
         _settings.Port = port;
-        _settings.UseTls = _useTls.Checked;
+        // [왜] TLS를 끈 상태는 저장하지 않는다. 테스트 때 한 번 끈 것이 계속 남아 실제 서버에도 평문으로 붙는 사고를 막는다.
+        _settings.UseTls = true;
         _settings.Save();
         return true;
     }
@@ -336,6 +390,20 @@ public sealed class LoginForm : Form
     // ── 수신 스레드에서 호출됨 → UI 스레드로 넘긴다 ──
     // 보낸 로그인 요청 (성공하면 ChatClient.LastLogin에 넣어 자동 재접속에 쓴다)
     private LoginRequest? _pendingLogin;
+    private bool _tokenLoginPending;
+
+    private static bool IsLocalHost(string host)
+        => host is "localhost" or "127.0.0.1" or "::1";
+
+    /// <summary>
+    /// 로그인을 기다리는 중에 연결이 끊김(서버가 옛 버전이라 끊었거나, 서버가 꺼짐) → "로그인 중..."에 멈춰 있지 않게 풀어 준다.
+    /// </summary>
+    private void OnDisconnected(string reason) => UiHelper.RunOnUi(this, () =>
+    {
+        if (_loginButton.Enabled) return; // 기다리는 중이 아니면 다음 로그인 때 다시 연결하면 된다
+        SetBusy(false);
+        ShowStatus(reason, error: true);
+    });
 
     private void OnPacketReceived(Packet packet)
     {
@@ -348,6 +416,16 @@ public sealed class LoginForm : Form
         SetBusy(false);
         if (!packet.Success)
         {
+            if (_tokenLoginPending)
+            {
+                _settings.SetLoginToken(_host.Text, int.TryParse(_port.Text, out int p) ? p : _settings.Port, _employeeNo.Text, null);
+                _settings.Save();
+                _autoLogin.Checked = false;
+                _tokenLoginPending = false;
+                ShowStatus(packet.Body ?? "자동 로그인이 만료되었습니다. 비밀번호를 입력하세요.", error: true);
+                _password.Focus();
+                return;
+            }
             ShowStatus(packet.Body ?? "로그인에 실패했습니다.", error: true);
             _password.SelectAll();
             _password.Focus();
@@ -356,6 +434,18 @@ public sealed class LoginForm : Form
 
         _client.Me = packet.GetData<UserInfo>();
         _client.LastLogin = _pendingLogin; // 자동 재접속 때 다시 로그인하려고 (메모리에만)
+        int.TryParse(_port.Text, out int loginPort);
+        if (_autoLogin.Checked && _client.Me is { MustChangePassword: false } && !string.IsNullOrEmpty(packet.Target))
+        {
+            _settings.SetLoginToken(_host.Text, loginPort, _client.Me.EmployeeNo, packet.Target);
+            _client.LastTokenLogin = new TokenLoginRequest { EmployeeNo = _client.Me.EmployeeNo, Token = packet.Target, DeviceId = _settings.DeviceId, ProtocolVersion = ProtocolInfo.Version };
+        }
+        else if (!_autoLogin.Checked)
+            _settings.SetLoginToken(_host.Text, loginPort, _employeeNo.Text, null);
+        _settings.RememberEmployeeNo = _remember.Checked || _autoLogin.Checked;
+        _settings.LastEmployeeNo = _settings.RememberEmployeeNo ? _employeeNo.Text.Trim() : "";
+        _settings.Save();
+        _tokenLoginPending = false;
 
         // 관리자가 초기화한 임시 비밀번호로 로그인함 → 새 비밀번호로 바꿔야 채팅 화면으로 넘어간다
         if (_client.Me is { MustChangePassword: true } && _pendingLogin is not null)
@@ -370,7 +460,7 @@ public sealed class LoginForm : Form
                 return;
             }
             // 자동 재접속은 새 비밀번호로 해야 한다
-            _client.LastLogin = new LoginRequest { EmployeeNo = _pendingLogin.EmployeeNo, Password = change.NewPassword };
+            _client.LastLogin = new LoginRequest { EmployeeNo = _pendingLogin.EmployeeNo, Password = change.NewPassword, ProtocolVersion = ProtocolInfo.Version };
             _client.Me.MustChangePassword = false;
         }
 
