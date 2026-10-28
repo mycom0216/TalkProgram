@@ -32,3 +32,19 @@ TestResults/
 # OS
 Thumbs.db
 .DS_Store
+
+# 서버 설정 (DB 비밀번호 포함) - appsettings.example.json만 올림
+appsettings.json
+
+# DB 비밀번호가 들어간 로컬 설치 스크립트
+db/setup_local.sql
+
+# 배포용 exe (용량이 커서 Git 제외)
+publish/
+
+# 서버가 받은 파일 (파일 전송)
+uploads/
+
+# 서버 TLS 인증서 (개인 키 포함 - 절대 올리지 않음)
+certs/
+*.pfx

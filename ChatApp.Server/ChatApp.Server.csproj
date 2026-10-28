@@ -11,4 +11,14 @@
     <ProjectReference Include="..\ChatApp.Common\ChatApp.Common.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- MariaDB / MySQL 드라이버 -->
+    <PackageReference Include="MySqlConnector" Version="2.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 실행 폴더(bin)로 설정 파일 복사. appsettings.json은 .gitignore 대상 -->
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

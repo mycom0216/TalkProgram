@@ -1,0 +1,222 @@
+using System.Collections.Concurrent;
+using System.Data.Common;
+using ChatApp.Common.Models;
+using ChatApp.Common.Protocol;
+using ChatApp.Server.Core;
+using ChatApp.Server.Data;
+using ChatApp.Server.Logging;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MessageStore.cs — 대화 기록(채팅·귓속말)을 DB에 저장하고, 지난 대화를 불러와 보내 주는 "DB 작업 스레드"
+//
+// [연결 관계]
+//   PacketHandler.HandleChat / HandleWhisper ──Save()──────────────▶ 큐 ──▶ DbWriter 스레드 ──▶ MessageRepository.InsertMany
+//   PacketHandler.AnnounceJoin(방 입장)      ──RequestRoomHistory()─▶ 큐 ──▶ DbWriter 스레드 ──▶ LoadRoom → History 패킷 전송
+//   PacketHandler.HandleHistoryRequest(1:1)  ──RequestDirectHistory()▶ 큐 ──▶ DbWriter 스레드 ──▶ LoadDirect → History 패킷 전송
+//   파일 메시지의 미리보기는 FileService.ReadThumbnail(생성자로 받은 함수)로 디스크에서 읽어 붙인다.
+//
+// [관련 패킷]
+//   History (Data = HistoryBatch): 서버 → 클라이언트. 방 입장 시 자동, 1:1은 HistoryReq(Target = 상대 사원번호) 요청 시.
+//   묶음이 여러 개면 마지막 묶음만 Last = true.
+//
+// [스레드]
+//   - Save / Request*History: 아무 스레드(주로 각 세션의 수신 스레드)에서 호출 → 큐에 넣고 즉시 반환
+//   - Run / Flush / SendHistory: 오직 "DbWriter" 스레드 1개에서만 실행 → DB 작업끼리는 lock이 필요 없다
+//   - Dispose: 서버 종료 시 메인 스레드(ChatServer.Stop)에서 호출
+// ═══════════════════════════════════════════════════════════════════════════
+namespace ChatApp.Server.Services;
+
+/// <summary>
+/// 대화 기록 저장·불러오기 전용 "DB 작업 스레드" (생산자-소비자 패턴, ServerLogger와 같은 구조).
+///
+/// 왜 따로 스레드를 두나?
+/// - 채팅을 받을 때마다 수신 스레드에서 바로 INSERT하면, DB가 잠깐 느려질 때 그 사람의 채팅 처리도 같이 멈춘다.
+/// - 그래서 수신 스레드는 큐에 넣기만 하고(Save, 아주 빠름) 바로 다음 패킷을 처리한다.
+///   DB 작업 스레드 1개가 큐에서 꺼내 모아서(배치) 저장한다.
+///
+/// 왜 "불러오기"도 같은 큐로 처리하나? (순서 보장)
+/// - 큐는 넣은 순서대로(FIFO) 처리된다. 방에 들어오기 직전에 보낸 메시지는 불러오기 요청보다 먼저 큐에 들어가 있으므로,
+///   불러오기를 처리할 때는 이미 DB에 저장된 뒤다. 저장과 불러오기를 다른 스레드로 나누면 "방금 한 말이 기록에 없는" 경쟁 상태가 생긴다.
+/// </summary>
+// [개념] 생산자-소비자(Producer-Consumer) 패턴:
+//   여러 "생산자"(수신 스레드들)가 작업을 큐에 넣고, "소비자"(DbWriter 스레드 1개)가 꺼내 처리한다.
+//   생산자는 느린 작업(DB)을 기다리지 않아도 되고, 소비자는 일이 없으면 잠들어 CPU를 쓰지 않는다.
+// [개념] IDisposable: "다 쓰면 정리(Dispose)해야 하는 자원을 가진 객체"라는 표시. 여기서는 스레드 종료·남은 저장 마무리.
+public sealed class MessageStore : IDisposable
+{
+    // 큐에 넣는 작업 종류 (record = 값만 담는 간단한 클래스)
+    // [개념] abstract record + 상속 record: "작업"이라는 공통 부모 아래 저장 작업 / 불러오기 작업 두 종류를 둔다.
+    //   한 큐에 서로 다른 종류의 작업을 넣고, 꺼낼 때 is 패턴(job is SaveJob save)으로 종류를 구분한다.
+    // [개념] record SaveJob(StoredMessage Message): 괄호 안이 곧 속성 목록인 "위치 레코드". 생성자·속성·비교가 자동으로 만들어진다.
+    private abstract record Job;
+    private sealed record SaveJob(StoredMessage Message) : Job;
+    // Before = 요청한 시각. 이 시각 "이전" 메시지만 기록으로 보낸다. 이후 메시지는 실시간 패킷으로 받으므로 중복을 줄인다.
+    private sealed record HistoryJob(ClientSession Session, int? RoomId, string? Me, string? Peer, DateTime Before) : Job;
+
+    // [개념] const: 컴파일할 때 값이 박히는 상수. 바뀌지 않는 설정값에 쓴다.
+    private const int MaxBatch = 200;                  // 한 트랜잭션에 저장할 최대 메시지 수
+    // [개념] 600_000: 숫자 사이의 _ 는 읽기 쉽게 하는 구분자일 뿐 값에는 영향이 없다(= 600000).
+    private const int MaxHistoryPacketBytes = 600_000; // 지난 대화 패킷 하나의 대략적인 최대 크기 (패킷 한도 1MB보다 여유 있게)
+
+    // [개념] BlockingCollection: 스레드 안전한 큐 + "비어 있으면 꺼내는 쪽이 기다림(블로킹)" 기능.
+    //   Add = 넣기(여러 스레드 동시 가능), GetConsumingEnumerable = 하나씩 꺼내기(없으면 들어올 때까지 대기).
+    //   직접 lock + Monitor.Wait/Pulse로 만들 수도 있지만 실수하기 쉬워서 .NET이 제공하는 것을 쓴다.
+    private readonly BlockingCollection<Job> _queue = new();
+    private readonly MessageRepository _repository;
+    // [개념] Func<string, byte[]?>: "string을 받아 byte[]?를 돌려주는 함수"를 담는 변수(델리게이트).
+    // [왜] FileService 객체 전체를 받지 않고 필요한 기능(미리보기 읽기) 하나만 함수로 받는다 → 두 클래스가 덜 얽힌다(결합도 ↓).
+    private readonly Func<string, byte[]?> _loadThumbnail;
+    private readonly ServerLogger _log;
+    private readonly Thread _thread;
+
+    /// <param name="loadThumbnail">파일 저장 경로 → 미리보기 바이트 (FileService.ReadThumbnail)</param>
+    public MessageStore(MessageRepository repository, Func<string, byte[]?> loadThumbnail, ServerLogger log)
+    {
+        _repository = repository;
+        _loadThumbnail = loadThumbnail;
+        _log = log;
+        // [개념] new Thread(Run): Run 메서드를 새 스레드에서 실행. 생성자에서 바로 시작해 서버가 켜지면 항상 대기 중이다.
+        // [왜] Name을 붙이면 로그([T n])와 Visual Studio 디버거의 스레드 창에서 어떤 스레드인지 바로 알 수 있다.
+        _thread = new Thread(Run) { IsBackground = true, Name = "DbWriter" };
+        _thread.Start();
+    }
+
+    /// <summary>메시지 저장 예약 (어느 스레드에서 불러도 안전, 바로 돌아온다).</summary>
+    // [스레드] 수신 스레드에서 호출. DB를 기다리지 않으므로 채팅 처리 속도에 영향이 거의 없다.
+    public void Save(StoredMessage message) => TryAdd(new SaveJob(message));
+
+    /// <summary>방 지난 대화를 session에게 보내도록 예약. 지금 시각 이전 것만 보낸다(이후 것은 실시간으로 받으므로).</summary>
+    public void RequestRoomHistory(ClientSession session, int roomId)
+        // [왜] 기록을 어느 세션에게 보낼지(session)를 작업에 같이 담아 둔다. DbWriter 스레드가 읽은 뒤 그 세션의 송신 큐에 넣는다.
+        => TryAdd(new HistoryJob(session, roomId, null, null, DateTime.Now));
+
+    /// <summary>1:1 지난 대화를 session에게 보내도록 예약.</summary>
+    public void RequestDirectHistory(ClientSession session, string me, string peer)
+        => TryAdd(new HistoryJob(session, null, me, peer, DateTime.Now));
+
+    private void TryAdd(Job job)
+    {
+        try { _queue.Add(job); }
+        // [주의] Dispose()에서 CompleteAdding을 부른 뒤에 Add하면 InvalidOperationException이 난다.
+        //   서버가 꺼지는 순간 도착한 채팅 때문에 예외로 죽지 않도록 조용히 무시한다.
+        catch (InvalidOperationException) { /* 서버 종료 중 (CompleteAdding 이후) */ }
+    }
+
+    // ───────────────────────── DB 작업 스레드 ─────────────────────────
+
+    /// <summary>DbWriter 스레드 본체: 큐에서 작업을 하나씩 꺼내 처리한다.</summary>
+    // [스레드] 이 메서드는 DbWriter 스레드에서만 돈다. DB 연결도 이 스레드만 쓰므로 DB 작업끼리 충돌이 없다.
+    private void Run()
+    {
+        // [개념] 배치(batch) 저장: 메시지를 하나씩 저장(커밋)하지 않고 여러 개를 모아서 한 번에 저장한다.
+        //   DB는 커밋할 때마다 디스크에 확실히 기록(fsync)하므로, 1000개를 1000번 커밋하는 것보다 1번 커밋이 훨씬 빠르다.
+        var batch = new List<StoredMessage>();
+
+        // GetConsumingEnumerable: 큐가 비면 기다리고, CompleteAdding()이 불리고 큐가 비면 끝난다
+        foreach (Job job in _queue.GetConsumingEnumerable())
+        {
+            if (job is SaveJob save)
+            {
+                batch.Add(save.Message);
+                // 뒤에 작업이 더 쌓여 있으면 조금 더 모았다가 한 번에 저장 (채팅이 몰릴 때 효율 ↑)
+                // [왜] 큐가 비었으면 바로 저장(평소엔 지연 없음), 쌓여 있으면 최대 200개까지 모았다가 저장(몰릴 때 효율).
+                //   "몇 초마다 저장" 같은 타이머 방식보다 지연이 적고 코드도 단순하다.
+                if (_queue.Count > 0 && batch.Count < MaxBatch) continue;
+                Flush(batch);
+            }
+            else if (job is HistoryJob history)
+            {
+                // [주의] FIFO 큐 순서 보장이 이 설계의 핵심이다.
+                //   예) A가 "안녕" 전송(Save가 큐에 들어감) → 직후 B가 입장(불러오기 요청이 큐 뒤에 들어감)
+                //   큐는 들어온 순서대로 처리되므로, B의 불러오기를 처리하기 전에 "안녕"이 반드시 DB에 저장되어 있다.
+                //   그래서 B는 입장 직전 메시지도 놓치지 않는다.
+                Flush(batch); // 순서 보장: 앞에 쌓인 메시지를 먼저 저장하고 나서 읽는다
+                SendHistory(history);
+            }
+        }
+        // [개념] foreach가 끝나는 때 = Dispose()에서 CompleteAdding을 부르고 큐가 완전히 빈 뒤. 즉 서버 종료 시점이다.
+        Flush(batch); // 종료 직전에 남은 것 저장
+    }
+
+    /// <summary>모아 둔 메시지를 DB에 한 번에 저장하고 목록을 비운다.</summary>
+    private void Flush(List<StoredMessage> batch)
+    {
+        if (batch.Count == 0) return;
+        try
+        {
+            _repository.InsertMany(batch);
+        }
+        catch (DbException ex)
+        {
+            // DB가 꺼져 있어도 채팅 자체는 계속 되어야 하므로 기록만 포기하고 로그를 남긴다
+            _log.Error($"대화 저장 실패 ({batch.Count}개): {ex.Message}");
+        }
+        batch.Clear();
+    }
+
+    /// <summary>지난 대화를 DB에서 읽어 요청한 사람에게 History 패킷(여러 묶음일 수 있음)으로 보낸다.</summary>
+    private void SendHistory(HistoryJob job)
+    {
+        if (job.Session.IsClosed) return; // 그사이 나간 사람
+
+        List<HistoryRow> rows;
+        try
+        {
+            // 방 번호가 있으면 방 기록, 없으면 1:1 기록 (job.Me!, job.Peer!: 1:1 작업이면 둘 다 반드시 채워져 있다)
+            rows = job.RoomId is int roomId
+                ? _repository.LoadRoom(roomId, job.Before, HistoryBatch.Limit)
+                : _repository.LoadDirect(job.Me!, job.Peer!, job.Before, HistoryBatch.Limit);
+        }
+        catch (DbException ex)
+        {
+            // 기록을 못 불러와도 채팅은 계속 된다. 클라이언트는 기록 없이 시작할 뿐이다.
+            _log.Error($"대화 기록 불러오기 실패: {ex.Message}");
+            return;
+        }
+
+        // 파일 메시지는 디스크에서 미리보기를 읽어 붙인다
+        foreach (HistoryRow row in rows)
+        {
+            // [개념] 패턴 두 개를 && 로 연결: File이 있고 저장 경로도 있을 때만 file, path 변수로 꺼내 쓴다.
+            if (row.Item.File is SharedFile file && row.StoredPath is string path)
+                file.Thumbnail = _loadThumbnail(path);
+        }
+
+        // 크기를 대략 계산해 가며 여러 묶음으로 나눈다 (미리보기 사진이 많으면 패킷 하나에 다 안 들어감)
+        var current = NewBatch(job);
+        int size = 0;
+        foreach (HistoryRow row in rows)
+        {
+            // [개념] 패킷 크기 어림셈: 기본 300바이트 + 한글은 UTF-8로 글자당 최대 3바이트 + 미리보기는 Base64로 바뀌면 4/3배로 커진다.
+            // [왜] 패킷 하나는 최대 1MB(PacketSerializer.MaxBodySize)라서, 사진 미리보기가 여러 장이면 한 패킷에 다 못 담는다.
+            //   약 600KB를 넘기 전에 지금 묶음을 보내고 새 묶음을 시작한다.
+            int itemSize = 300 + row.Item.Body.Length * 3 + (row.Item.File?.Thumbnail?.Length ?? 0) * 4 / 3;
+            if (current.Items.Count > 0 && size + itemSize > MaxHistoryPacketBytes)
+            {
+                // 아직 뒤에 묶음이 더 있다는 표시 → 클라이언트는 Last = true가 올 때까지 모아 둔다
+                current.Last = false;
+                // [스레드] Send는 세션의 송신 큐에 넣기만 하므로 DbWriter 스레드가 네트워크 때문에 멈추지 않는다.
+                job.Session.Send(Packet.Create(PacketType.History).WithData(current));
+                current = NewBatch(job);
+                size = 0;
+            }
+            current.Items.Add(row.Item);
+            size += itemSize;
+        }
+        // 마지막 묶음 (기록이 하나도 없어도 Last = true인 빈 묶음을 보내 "불러오기 끝"을 알린다)
+        job.Session.Send(Packet.Create(PacketType.History).WithData(current));
+    }
+
+    /// <summary>빈 묶음 하나 만들기. 기본값은 Last = true(마지막 묶음).</summary>
+    private static HistoryBatch NewBatch(HistoryJob job) => new() { RoomId = job.RoomId, PeerNo = job.Peer, Last = true };
+
+    /// <summary>서버 종료 시: 더 받지 않고, 남은 저장을 마칠 때까지 최대 5초 기다린다.</summary>
+    public void Dispose()
+    {
+        // [개념] CompleteAdding: "더 이상 넣지 않는다"는 표시. 큐가 비면 Run의 foreach가 끝나 스레드가 종료된다.
+        _queue.CompleteAdding();
+        // [개념] Join: 그 스레드가 끝날 때까지 기다린다. 최대 5초만 기다려 DB가 멈춰 있어도 서버 종료가 영원히 막히지 않게 한다.
+        // [왜] 이걸 안 하면 서버를 끌 때 큐에 남아 있던(아직 저장 안 된) 마지막 대화가 사라진다.
+        _thread.Join(TimeSpan.FromSeconds(5));
+    }
+}

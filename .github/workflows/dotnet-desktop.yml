@@ -1,0 +1,33 @@
+# 푸시·PR마다 GitHub 서버(Windows)에서 솔루션 전체를 빌드해서 "빌드가 깨지지 않았는지" 확인한다(CI).
+# - WinForms 클라이언트는 Windows 전용(net10.0-windows)이라 windows-latest에서 돌린다.
+# - 이전 파일은 GitHub의 MSIX 패키징 템플릿을 그대로 둔 것이라(솔루션 이름 자리표시자, .NET 8, 서명 인증서 필요) 항상 실패했다.
+name: Build
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        configuration: [ Debug, Release ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # global.json이 .NET 10 SDK를 요구한다
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore ChatApp.slnx
+
+      - name: Build
+        run: dotnet build ChatApp.slnx --configuration ${{ matrix.configuration }} --no-restore
