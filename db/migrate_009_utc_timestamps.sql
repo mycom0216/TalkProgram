@@ -5,8 +5,8 @@ USE chatapp;
 -- 먼저 preview_009_utc_timestamps.sql 결과를 확인하고 전체 DB 백업을 만든다.
 -- 아래 두 값을 실제 기존 저장 시간대에 맞게 직접 설정해야 변환이 진행된다.
 -- 예: 한국 표준시라면 offset=9, confirmation='BACKUP_DONE_AND_SOURCE_TIMEZONE_CONFIRMED'
-SET @legacy_offset_hours = NULL;
-SET @utc_migration_confirmation = NULL;
+SET @legacy_offset_hours = 9;
+SET @utc_migration_confirmation = 'BACKUP_DONE_AND_SOURCE_TIMEZONE_CONFIRMED';
 SET @apply_utc_migration = (
   (SELECT COUNT(*) = 0 FROM schema_version WHERE version = 9)
   AND @legacy_offset_hours BETWEEN -14 AND 14
