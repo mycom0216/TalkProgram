@@ -202,7 +202,9 @@ internal sealed class BarChart : StatsControlBase
                 cell.Y = bar.Y - SmallFont.Height;
                 TextRenderer.DrawText(g, _values[i].ToString("N0"), SmallFont, cell, Theme.Text, TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
             }
-            if (i % labelEvery == 0 || i == _highlight)
+            // 강조 칸(오늘·지금 시간)의 이름은 항상 쓰고, 그 옆 칸 이름은 겹치지 않게 건너뛴다 ("14시15시"처럼 붙어 보이던 문제)
+            bool nearHighlight = _highlight >= 0 && i != _highlight && Math.Abs(i - _highlight) < labelEvery;
+            if ((i % labelEvery == 0 && !nearHighlight) || i == _highlight)
             {
                 cell.Y = plot.Bottom + S(3);
                 TextRenderer.DrawText(g, _labels[i], SmallFont, cell, i == _highlight ? Theme.Primary : Theme.SubText,
