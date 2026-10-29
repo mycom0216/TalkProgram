@@ -122,6 +122,33 @@ internal static class Theme
 
     /// <summary>동그란 이니셜 아바타 (이름 첫 글자).</summary>
     // [왜] 사진 프로필 기능이 아직 없으므로, 색 동그라미 + 이름 첫 글자로 사람을 구분한다(카카오톡 기본 프로필과 비슷한 역할).
+    /// <summary>
+    /// 프로필 사진 찾기 (사원번호 → 사진, 없으면 null). 메인 창이 로그인 뒤 AvatarCache.Get으로 채운다.
+    /// [왜] 아바타를 그리는 곳(목록·말풍선·대화창 머리·알림 창)이 여러 군데라, 각각에 사진 보관함을 넘기는 대신 한곳에서 찾게 한다.
+    /// </summary>
+    public static Func<string, Image?>? PhotoLookup;
+
+    /// <summary>아바타: 프로필 사진이 있으면 동그랗게 자른 사진, 없으면 이니셜 원.</summary>
+    public static void DrawAvatar(Graphics g, Rectangle r, string name, Color color, string? photoKey)
+    {
+        Image? photo = photoKey is { Length: > 0 } ? PhotoLookup?.Invoke(photoKey) : null;
+        if (photo is null)
+        {
+            DrawAvatar(g, r, name, color);
+            return;
+        }
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using var path = new GraphicsPath();
+        path.AddEllipse(r);
+        GraphicsState state = g.Save();
+        g.SetClip(path);
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.DrawImage(photo, r);
+        g.Restore(state);
+        using var ring = new Pen(Color.FromArgb(40, 0, 0, 0));
+        g.DrawEllipse(ring, r); // 흰 배경 사진도 테두리가 보이게
+    }
+
     public static void DrawAvatar(Graphics g, Rectangle r, string name, Color color)
     {
         // [개념] 안티앨리어싱(AntiAlias): 원·곡선의 가장자리 픽셀을 중간색으로 칠해 계단 현상 없이 매끄럽게 보이게 한다.

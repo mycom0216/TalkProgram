@@ -672,7 +672,7 @@ internal sealed class BubbleChatView : UserControl
             case ChatItemKind.Other:
                 if (item.ShowHeader)
                 {
-                    Theme.DrawAvatar(g, Shift(item.AvatarRect, dy), item.Sender, Theme.AvatarColor(item.SenderKey));
+                    Theme.DrawAvatar(g, Shift(item.AvatarRect, dy), item.Sender, Theme.AvatarColor(item.SenderKey), item.SenderKey);
                     TextRenderer.DrawText(g, item.Sender, Theme.SmallBold, Shift(item.NameRect, dy), Theme.SubText, TextFormatFlags.NoPrefix);
                 }
                 if (item.File is not null)

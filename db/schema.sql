@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS users (
   created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   last_login_at       DATETIME     NULL,
   status_message      VARCHAR(60)  NULL,                  -- 상태 메시지 (예: 오후 반차)
-  must_change_password TINYINT(1)  NOT NULL DEFAULT 0     -- 1 = 관리자가 초기화한 임시 비밀번호 (다음 로그인 때 변경 필수)
+  must_change_password TINYINT(1)  NOT NULL DEFAULT 0,    -- 1 = 관리자가 초기화한 임시 비밀번호 (다음 로그인 때 변경 필수)
+  photo_version       BIGINT       NOT NULL DEFAULT 0      -- 프로필 사진 바꾼 시각 (0 = 없음). 사진은 uploads\profiles\사원번호.img
 ) ENGINE=InnoDB;
 
 -- 채팅방: 서버를 다시 켜도 남는다. 마지막 멤버가 나가면 closed_at이 채워지고 목록에서 사라진다(대화 기록은 남음).
@@ -147,7 +148,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
   applied_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 INSERT IGNORE INTO schema_version (version, description) VALUES
-  (2, 'files'), (3, 'status_message'), (4, 'admin'), (5, 'rooms_messages'), (6, 'room_notices'), (7, 'message_edit'), (8, 'login_tokens'), (9, 'utc_timestamps'), (10, 'device_login_tokens'), (11, 'friends_phone');
+  (2, 'files'), (3, 'status_message'), (4, 'admin'), (5, 'rooms_messages'), (6, 'room_notices'), (7, 'message_edit'), (8, 'login_tokens'), (9, 'utc_timestamps'), (10, 'device_login_tokens'), (11, 'friends_phone'), (12, 'profile_photo');
 
 -- 친구: owner가 friend를 자기 목록에 추가 (한쪽 방향, 상대 승인 없음)
 CREATE TABLE IF NOT EXISTS friends (

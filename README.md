@@ -57,10 +57,11 @@ ChatApp.slnx
 "C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_004_admin.sql"
 "C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_005_rooms_messages.sql"
 "C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_011_friends.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_012_profile_photo.sql"
 ```
 
    - 002 = 파일 전송, 003 = 상태 메시지, 004 = 관리자 기능, 005 = 영구·비공개 방, 답장·공감·삭제, 읽음 표시, 검색 인덱스. 이미 실행한 것을 다시 실행해도 문제없다(IF NOT EXISTS).
-   - 006~010도 같은 방식으로 번호 순서대로 실행한다. 011 = 친구 목록·휴대폰 번호.
+   - 006~010도 같은 방식으로 번호 순서대로 실행한다. 011 = 친구 목록·휴대폰 번호, 012 = 프로필 사진.
    - 서버는 시작할 때 DB 버전(schema_version)을 확인하고, 빠진 스크립트가 있으면 실행할 명령을 알려 주고 켜지지 않는다.
 5. 백업: `db\backup.bat`을 작업 스케줄러에 매일 등록한다 (사용법은 파일 안 주석).
 
@@ -188,8 +189,9 @@ TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리�
 - [x] 관리자 기능: 가입 승인·거절, 정지·퇴사(즉시 끊김), 잠금 해제, 임시 비밀번호 발급과 변경 강제, 강제 로그아웃, 관리자 지정. 관리자 창과 서버 콘솔 명령
 - [x] 감사 로그: 로그인·파일·관리 동작 기록(전용 기록 스레드), 관리자 창에서 검색
 - [x] 비밀번호 변경 (내 이름 메뉴)
+- [x] 프로필 사진: 사진을 골라 정사각형으로 잘라 바꾸기·지우기, 목록·말풍선·대화창·알림 창에 표시, 바뀐 사람의 사진만 받아 PC에 캐시
 - [x] 친구: 아이디(사원번호)·휴대폰 번호로 찾아 추가(한쪽 방향), 접속하지 않은 친구도 목록에 표시, 오른쪽 클릭으로 추가·삭제. 휴대폰 번호는 공개하지 않고 정확히 일치할 때만 찾음(가린 번호로 표시)
-- [x] 6단계 테스트: xUnit 단위·통합 테스트 104개(CI 자동 실행), 화면 자동 테스트 3개(FlaUI), 관리자·방·정원·통계·친구 시나리오, TLS 검증, 부하 테스트(100·300·500명)
+- [x] 6단계 테스트: xUnit 단위·통합 테스트 106개(CI 자동 실행), 화면 자동 테스트 3개(FlaUI), 관리자·방·정원·통계·친구·프로필 사진 시나리오, TLS 검증, 부하 테스트(100·300·500명)
 - [x] 6단계 문서화: README, 아키텍처 문서(docs/ARCHITECTURE.md), 테스트 결과서(docs/TESTING.md), 코드 주석, CI 빌드 배지
 - [x] 서버 안정성: 연결 수·IP당 연결 수 제한, 로그인 제한 시간, 보내기 큐 용량(바이트) 제한, 프로토콜 버전 확인, 모르는 패킷 무시, 예외로 스레드가 죽지 않게 정리
 - [x] 보안·운영: 로그인·가입 속도 제한(IP별), 로그인 시간 차 공격 방지, 보관 기간 자동 정리(대화 365일·파일 180일·감사 730일, 삭제된 방의 파일은 바로), DB 백업 스크립트, DB 버전 확인

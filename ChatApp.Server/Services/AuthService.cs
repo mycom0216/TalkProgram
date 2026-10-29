@@ -252,6 +252,7 @@ public sealed class AuthService
             Role = user.Role,
             StatusMessage = _users.TryLoadStatusMessage(user.EmployeeNo) ?? "", // 지난번에 정한 상태 메시지
             MustChangePassword = _users.TryGetMustChangePassword(user.EmployeeNo), // 관리자가 초기화한 임시 비밀번호인지
+            PhotoVersion = _users.GetPhotoVersion(user.EmployeeNo), // 프로필 사진 (0 = 없음)
         };
         return (info, $"{info.DisplayName}님, 환영합니다!");
     }

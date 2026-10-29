@@ -34,6 +34,7 @@ public sealed class PacketHandler
 
     public ServerLogger Log { get; }
     private readonly FriendService _friendService;
+    private readonly ProfileService _profileService;
 
     public PacketHandler(SessionManager sessions, RoomManager rooms, AuthService auth, RoomRepository roomRepository,
                          MessageRepository messageRepository, UserRepository users, FileService files, MessageStore messages,
@@ -51,6 +52,7 @@ public sealed class PacketHandler
         _roomService = new RoomService(sessions, rooms, roomRepository, users, messages, audit, log, BroadcastRoomList);
         _messageService = new MessageService(sessions, rooms, _roomService, messages, messageRepository, users, audit, log);
         _friendService = new FriendService(sessions, users, log);
+        _profileService = new ProfileService(users, config.UploadRoot, log, BroadcastUserList);
     }
 
     public void Handle(ClientSession session, Packet packet)
@@ -116,6 +118,10 @@ public sealed class PacketHandler
                 case PacketType.FriendRemove: _friendService.HandleRemove(session, packet); break;
                 case PacketType.PhoneInfoReq: _friendService.HandlePhoneInfo(session); break;
                 case PacketType.PhoneUpdate: _friendService.HandlePhoneUpdate(session, packet); break;
+
+                // 프로필 사진
+                case PacketType.ProfilePhotoUpdate: _profileService.HandleUpdate(session, packet); break;
+                case PacketType.ProfilePhotoReq: _profileService.HandleRequest(session, packet); break;
 
                 // 파일
                 case PacketType.FileUploadReq: _files.HandleUploadRequest(session, packet); break;

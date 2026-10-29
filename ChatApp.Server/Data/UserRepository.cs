@@ -388,13 +388,13 @@ public sealed class UserRepository(Db db)
         using DbConnection conn = db.Open();
         using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT employee_no, name, department, position, role FROM users
+            SELECT employee_no, name, department, position, role, photo_version FROM users
             WHERE status = 'ACTIVE' ORDER BY department, name LIMIT 10000
             """;
         var list = new List<UserInfo>();
         using DbDataReader r = cmd.ExecuteReader();
         while (r.Read())
-            list.Add(new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4) });
+            list.Add(new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4), PhotoVersion = Convert.ToInt64(r.GetValue(5)) });
         return list;
     }
 
@@ -424,12 +424,33 @@ public sealed class UserRepository(Db db)
     {
         using DbConnection conn = db.Open();
         using DbCommand cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT employee_no, name, department, position, role FROM users WHERE employee_no = @no AND status = 'ACTIVE'";
+        cmd.CommandText = "SELECT employee_no, name, department, position, role, photo_version FROM users WHERE employee_no = @no AND status = 'ACTIVE'";
         cmd.AddParam("@no", employeeNo);
         using DbDataReader r = cmd.ExecuteReader();
         return r.Read()
-            ? new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4) }
+            ? new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4), PhotoVersion = Convert.ToInt64(r.GetValue(5)) }
             : null;
+    }
+
+    // ───────── 프로필 사진 (ProfileService) ─────────
+
+    public long GetPhotoVersion(string employeeNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT photo_version FROM users WHERE employee_no = @no AND status = 'ACTIVE'";
+        cmd.AddParam("@no", employeeNo);
+        return cmd.ExecuteScalar() is { } v and not DBNull ? Convert.ToInt64(v) : 0;
+    }
+
+    public void SetPhotoVersion(string employeeNo, long version)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE users SET photo_version = @v WHERE employee_no = @no";
+        cmd.AddParam("@v", version);
+        cmd.AddParam("@no", employeeNo);
+        cmd.ExecuteNonQuery();
     }
 
     // ───────── 친구·휴대폰 번호 (FriendService) ─────────
@@ -439,11 +460,11 @@ public sealed class UserRepository(Db db)
     {
         using DbConnection conn = db.Open();
         using DbCommand cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT employee_no, name, department, position, role FROM users WHERE phone = @phone AND status = 'ACTIVE'";
+        cmd.CommandText = "SELECT employee_no, name, department, position, role, photo_version FROM users WHERE phone = @phone AND status = 'ACTIVE'";
         cmd.AddParam("@phone", phone);
         using DbDataReader r = cmd.ExecuteReader();
         return r.Read()
-            ? new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4) }
+            ? new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4), PhotoVersion = Convert.ToInt64(r.GetValue(5)) }
             : null;
     }
 
@@ -482,7 +503,7 @@ public sealed class UserRepository(Db db)
         using DbConnection conn = db.Open();
         using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT u.employee_no, u.name, u.department, u.position, u.role, COALESCE(u.status_message, '')
+            SELECT u.employee_no, u.name, u.department, u.position, u.role, COALESCE(u.status_message, ''), u.photo_version
             FROM friends f JOIN users u ON u.employee_no = f.friend_no
             WHERE f.owner_no = @owner AND u.status = 'ACTIVE'
             ORDER BY u.name LIMIT 2000
@@ -494,7 +515,7 @@ public sealed class UserRepository(Db db)
             list.Add(new UserInfo
             {
                 EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3),
-                Role = r.GetString(4), StatusMessage = r.GetString(5),
+                Role = r.GetString(4), StatusMessage = r.GetString(5), PhotoVersion = Convert.ToInt64(r.GetValue(6)),
             });
         return list;
     }

@@ -522,7 +522,7 @@ internal sealed class ChatWindow : Form
             g.FillEllipse(ring, Rectangle.Inflate(avatar, S(2), S(2)));
         // [개념] 삼항 연산자 조건 ? A : B
         string avatarText = Kind == ChatWindowKind.Room ? "#" : _headerTitle;
-        Theme.DrawAvatar(g, avatar, avatarText, Theme.AvatarColor(AvatarKey));
+        Theme.DrawAvatar(g, avatar, avatarText, Theme.AvatarColor(AvatarKey), AvatarKey);
         if (Kind == ChatWindowKind.Direct)
         {
             // 1:1이면 아바타 오른쪽 아래에 접속 상태 점(초록=접속, 회색=오프라인)

@@ -66,7 +66,7 @@ internal sealed class ToastForm : Form
 
         int size = S(42);
         var avatar = new Rectangle(S(18), (Height - size) / 2, size, size);
-        Theme.DrawAvatar(g, avatar, _title, Theme.AvatarColor(_avatarKey));
+        Theme.DrawAvatar(g, avatar, _title, Theme.AvatarColor(_avatarKey), _avatarKey);
 
         int x = avatar.Right + S(12), w = Width - x - S(12);
         TextRenderer.DrawText(g, _title, Theme.BodyBold, new Rectangle(x, S(16), w, S(20)), Theme.Text,

@@ -214,6 +214,7 @@ TCP는 메시지 경계가 없는 바이트 흐름이라, 모든 패킷을 아�
 | 채팅방 | `RoomListReq/RoomList`, `RoomCreate`, `RoomJoin`, `RoomRes`, `RoomInvite`, `RoomLeave/RoomLeft`, `RoomTransferOwner`, `RoomNotice`, `RoomDelete`, `RoomUpdate`, `RoomFilesReq/Res` |
 | 사람 | `UserList`(접속자), `DirectoryReq/Directory`(회사 전체), `StatusUpdate` |
 | 친구 | `FriendListReq/FriendList`, `FriendSearchReq/FriendSearchRes`(아이디·휴대폰 번호, 정확히 일치), `FriendAdd`, `FriendRemove`, `PhoneInfoReq/PhoneInfo`, `PhoneUpdate` |
+| 프로필 사진 | `ProfilePhotoUpdate`(160×160 JPEG, 비우면 지우기), `ProfilePhotoReq/ProfilePhoto` — 목록에는 `UserInfo.PhotoVersion`만 싣고, 바뀐 사람의 사진만 받아 내 PC에 캐시 |
 | 파일 | `FileUploadReq/Res`, `FileChunk`, `FileUploadEnd`, `FileUploadCancel`, `FileMsg`, `FileDownloadReq/Res`, `FileDownloadEnd`, `FileDownloadCancel` |
 | 관리자 | `AdminUserListReq/AdminUserList`, `AdminActionReq/Res`, `AdminAuditReq/AdminAudit`, `AdminStatsReq/AdminStats`, `AdminNotify` |
 
@@ -338,6 +339,7 @@ erDiagram
 | `migrate_002` ~ `005` | 파일, 상태 메시지, 관리자, 영구·비공개 방·답장·공감·읽음 |
 | `migrate_006` ~ `010` | 방 공지, 메시지 수정, 자동 로그인 토큰, UTC 시각, 기기별 토큰 |
 | `migrate_011` | 친구 목록(`friends`), 휴대폰 번호(`users.phone`, UNIQUE) |
+| `migrate_012` | 프로필 사진 버전(`users.photo_version`). 사진 파일은 `uploads\profiles\사원번호.img` |
 
 ---
 

@@ -83,6 +83,9 @@ public sealed class ClientSettings
             ? Path.Combine(dir, "client.json")
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChatApp", "client.json");
 
+    /// <summary>이 PC에서 사내톡이 쓰는 폴더 (설정 파일, 프로필 사진 캐시).</summary>
+    public static string DataFolder => Path.GetDirectoryName(FilePath)!;
+
     /// <summary>설정 파일을 읽는다. 없거나 깨져 있으면 기본값으로 시작한다(프로그램이 죽지 않게).</summary>
     public static ClientSettings Load()
     {

@@ -138,4 +138,9 @@ public enum PacketType
     PhoneInfoReq,      // 내 휴대폰 번호 요청 (본인만)
     PhoneUpdate,       // 내 휴대폰 번호 등록·변경 (Body = 번호, 빈 문자열 = 지우기) → PhoneInfo
     PhoneInfo,         // 내 휴대폰 번호 (Data = PhoneInfo, 실패하면 Success=false + Body)
+
+    // 프로필 사진
+    ProfilePhotoUpdate, // 내 프로필 사진 바꾸기 (Bin = 160×160 JPEG/PNG, 비어 있으면 지우기)
+    ProfilePhotoReq,    // 다른 사람 사진 받기 (Body = 사원번호)
+    ProfilePhoto,       // 사진 (Target = 사원번호, Data = PhotoInfo{Version}, Bin = 사진 / 실패하면 Success=false + Body)
 }

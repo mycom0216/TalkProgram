@@ -24,6 +24,7 @@ internal sealed class CardItem
     public string Title { get; init; } = "";
     public string? Subtitle { get; init; }
     public string? AvatarText { get; init; }
+    public string? PhotoKey { get; init; } // 프로필 사진을 찾을 사원번호 (없으면 이니셜)
     public Color AvatarColor { get; init; } = Theme.Primary;
     public bool ShowStatus { get; init; }
     public bool Online { get; init; } = true;
@@ -297,7 +298,7 @@ internal sealed class CardListView : UserControl
         int size = S(40);
         // 줄의 세로 가운데에 놓기: (줄 높이 - 아바타 크기) / 2
         var avatar = new Rectangle(row.X + S(14), row.Y + (row.Height - size) / 2, size, size);
-        Theme.DrawAvatar(g, avatar, item.AvatarText ?? item.Title, item.AvatarColor);
+        Theme.DrawAvatar(g, avatar, item.AvatarText ?? item.Title, item.AvatarColor, item.PhotoKey);
         if (item.ShowStatus)
         {
             int dot = S(13);
