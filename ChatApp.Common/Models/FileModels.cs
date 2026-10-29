@@ -88,8 +88,9 @@ public static class FileRules
     // [왜] 미리보기는 FileMsg 패킷에 실려 방 사람 모두에게 가므로 작게 제한한다(패킷 최대 1MB도 넘지 않게).
     public const int MaxThumbnailBytes = 200 * 1024;
     public const int MaxFileNameLength = 120;
-    // [왜] 한 사람이 파일 100개를 동시에 보내면 서버 스레드·디스크·네트워크를 독차지한다. 동시에 3개까지만 허용한다.
-    public const int MaxActiveTransfers = 3;                   // 한 사람이 동시에 올리기/내려받기 할 수 있는 개수(각각)
+    // [왜] 내려받기는 파일마다 서버 스레드를 하나씩 쓰므로 1인당 동시 3개까지만 받는다(나머지는 잠시 후 다시).
+    //      올리기는 개수 제한이 없다: 클라이언트가 3개씩 차례로 보내고 나머지는 자동으로 기다렸다가 이어서 보낸다.
+    public const int MaxActiveTransfers = 3;                   // 클라이언트 동시 올리기 수 · 서버 1인당 동시 내려받기 수
 
     // [개념] HashSet: 중복 없는 집합. Contains(포함 여부 확인)가 리스트보다 훨씬 빠르다(평균 O(1)).
     // [개념] static readonly: 프로그램이 시작될 때 한 번 만들어지고 다시 대입할 수 없는 공유 값.

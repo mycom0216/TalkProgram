@@ -213,13 +213,10 @@ public sealed class FileService
         // [개념] 속성 패턴 is { Length: > N }: "null이 아니고, Length가 N보다 크면". null 확인과 크기 비교를 한 번에 한다.
         // [왜] 미리보기는 FileMsg에 담겨 방 사람 전원에게 가므로 크면 안 된다(1000명 방이면 1000배).
         if (offer.Thumbnail is { Length: > FileRules.MaxThumbnailBytes }) { Fail("미리보기 이미지가 너무 큽니다."); return; }
-        // [왜] 한 사람이 동시에 너무 많은 파일을 올리면 서버 디스크·대역폭을 독차지한다. 1인당 동시 3개로 제한.
-        // [개념] u => u.Owner == session : 람다식. "각 u에 대해 주인이 이 세션인가?"를 검사하는 짧은 익명 함수.
-        if (_uploads.Values.Count(u => u.Owner == session) >= FileRules.MaxActiveTransfers)
-        {
-            Fail($"파일은 동시에 {FileRules.MaxActiveTransfers}개까지 보낼 수 있습니다. 잠시 후 다시 보내세요.");
-            return;
-        }
+        // [변경] 예전에는 1인당 동시 올리기를 3개로 막아 "파일은 동시에 3개까지" 실패가 났다.
+        //        (클라이언트는 다 보낸 파일의 자리를 바로 비우는데, 서버는 저장을 마칠 때까지 자리를 잡고 있어 4번째가 거절됐다)
+        //        이제 개수는 막지 않는다. 대신 조각은 연결 하나의 대량 큐로 차례대로 오고(ChatClient.SendBulk),
+        //        파일 크기·디스크 여유 공간·멈춘 올리기 정리(2분)로 서버를 보호한다.
 
         // 서버 디스크 여유 공간 확인 (3GB 파일도 받으므로 1GB는 남겨 둔다)
         try
