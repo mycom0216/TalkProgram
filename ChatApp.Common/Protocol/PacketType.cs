@@ -126,4 +126,5 @@ public enum PacketType
     MessageEdited,     // 수정된 메시지 전파 (Body = 새 내용, Data = MessageRef)
     Typing,            // 입력 중 상태 (Data = TypingRequest)
     TypingUpdate,      // 입력 중 상태 전달 (Data = TypingInfo)
+    RoomCapacity,      // 방 정원 바꾸기 (Target = 방 번호, Body = 새 정원). 방장 또는 관리자만. 결과는 RoomUpdate
 }

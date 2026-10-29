@@ -261,6 +261,41 @@ public sealed class RoomService(
             BroadcastRoomUpdate(room);
     }
 
+    /// <summary>방장 또는 관리자가 방 정원(최대 인원)을 바꾼다. 지금 멤버 수보다 작게는 못 줄인다.</summary>
+    public void HandleCapacity(ClientSession session, Packet packet)
+    {
+        UserInfo me = session.User!;
+        Room? room = int.TryParse(packet.Target, out int roomId) ? rooms.Find(roomId) : null;
+        if (room is null || room.IsLobby)
+        {
+            SendError(session, "정원을 바꿀 수 없는 방입니다.");
+            return;
+        }
+        if (room.OwnerNo != me.EmployeeNo && !me.IsAdmin)
+        {
+            SendError(session, "방장 또는 관리자만 방 정원을 바꿀 수 있습니다.");
+            return;
+        }
+        if (!int.TryParse(packet.Body, out int max) || max < CreateRoomRequest.MinUsers || max > CreateRoomRequest.MaxUsersLimit)
+        {
+            SendError(session, $"방 정원은 {CreateRoomRequest.MinUsers}~{CreateRoomRequest.MaxUsersLimit}명으로 정할 수 있습니다.");
+            return;
+        }
+        int before = room.MaxUsers;
+        if (max == before) return;
+        if (!rooms.SetMaxUsers(room, max))
+        {
+            SendError(session, "지금 멤버 수보다 작게 줄일 수 없습니다.");
+            return;
+        }
+        repository.SetMaxUsers(room.Id, max);
+        log.Info($"방 정원 변경: #{room.Id} '{room.Name}' {before} → {max} by {me}");
+        audit.Record(AuditActions.RoomCapacity, me.EmployeeNo, null, $"#{room.Id} {room.Name} {before}→{max}");
+        rooms.SendToRoom(room, RoomSystem(room, $"{me.DisplayName}님이 방 정원을 {max}명으로 바꿨습니다."));
+        BroadcastRoomUpdate(room);
+        roomListChanged(); // 방 목록의 "3/10"도 바뀐다
+    }
+
     /// <summary>방장 바꾸기 (메모리 → DB → 알림·감사). 멤버가 아니면 false.</summary>
     private bool ChangeOwner(Room room, string employeeNo, UserInfo actor, string? reason)
     {

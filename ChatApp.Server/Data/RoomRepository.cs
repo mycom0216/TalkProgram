@@ -146,6 +146,16 @@ public sealed class RoomRepository(Db db)
         cmd.ExecuteNonQuery();
     }
 
+    public void SetMaxUsers(int roomId, int maxUsers)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE rooms SET max_users = @max WHERE room_id = @room";
+        cmd.AddParam("@max", maxUsers);
+        cmd.AddParam("@room", roomId);
+        cmd.ExecuteNonQuery();
+    }
+
     public void SetPinnedNotice(int roomId, string text, string actorNo)
     {
         using DbConnection conn = db.Open();

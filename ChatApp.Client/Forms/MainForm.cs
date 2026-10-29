@@ -1078,6 +1078,7 @@ public sealed class MainForm : Form
             if (next is not null)
                 _client.Send(Packet.Create(PacketType.RoomTransferOwner, body: next, target: roomId.ToString()));
         });
+        var capacity = menu.Items.Add("방 정원 바꾸기...", null, (_, _) => ChangeRoomCapacity(roomId, window));
         menu.Items.Add(new ToolStripSeparator());
         var leave = menu.Items.Add("방 나가기", null, (_, _) => ConfirmLeaveRoom(roomId, window));
         var delete = menu.Items.Add("방 삭제", null, (_, _) => ConfirmDeleteRoom(roomId, window));
@@ -1089,6 +1090,7 @@ public sealed class MainForm : Form
             delete.Visible = room is not null && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
             delete.Enabled = _connected;
             notice.Enabled = room is not null && _connected && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
+            capacity.Enabled = notice.Enabled;
             transfer.Enabled = room is not null && _connected && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin) && (room.Members?.Count ?? 0) > 1;
         };
         return menu;
@@ -1133,14 +1135,37 @@ public sealed class MainForm : Form
         if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
         var members = room.Members?.Select(m => m.EmployeeNo) ?? [];
         int roomLeft = room.MaxUsers > 0 ? Math.Max(0, room.MaxUsers - room.MemberCount) : int.MaxValue;
-        if (roomLeft == 0)
+        bool canManage = room.OwnerNo == _me.EmployeeNo || _me.IsAdmin;
+        if (roomLeft == 0 && !canManage)
         {
-            MessageBox.Show(owner, $"방이 가득 찼습니다 (최대 {room.MaxUsers}명).", "초대", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(owner, $"방이 가득 찼습니다 (최대 {room.MaxUsers}명).\n방장에게 정원을 늘려 달라고 요청하세요.", "초대",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         using var picker = new PeoplePickerForm(_client, $"'{room.Name}' 방에 초대", multiSelect: true, members.Append(_me.EmployeeNo),
                                                 maxSelect: roomLeft);
+        // [방장·관리자] 남은 자리보다 많이 고르면 "정원 늘리고 초대"로 바뀐다 → 확인 후 정원부터 늘린다
+        if (canManage)
+        {
+            picker.ConfirmOverLimit = count =>
+            {
+                int need = room.MemberCount + count;
+                if (need > CreateRoomRequest.MaxUsersLimit)
+                {
+                    MessageBox.Show(picker, $"방 정원은 최대 {CreateRoomRequest.MaxUsersLimit}명입니다. {need - CreateRoomRequest.MaxUsersLimit}명을 빼 주세요.",
+                        "초대", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return false;
+                }
+                return MessageBox.Show(picker, $"방 정원을 {room.MaxUsers}명 → {need}명으로 늘리고 {count}명을 초대할까요?", "정원 늘리고 초대",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+            };
+        }
         if (picker.ShowDialog(owner) != DialogResult.OK) return;
+        if (room.MaxUsers > 0 && picker.Selected.Count > roomLeft)
+        {
+            // [순서] 서버는 한 연결의 패킷을 받은 순서대로 처리하므로, 정원 변경이 초대보다 먼저 반영된다
+            _client.Send(Packet.Create(PacketType.RoomCapacity, body: (room.MemberCount + picker.Selected.Count).ToString(), target: roomId.ToString()));
+        }
         // 서버는 요청 하나에 최대 50명까지 받는다 → [전체 선택]으로 많이 골랐으면 50명씩 나눠 보낸다
         foreach (string[] chunk in picker.Selected.Select(u => u.EmployeeNo).Chunk(RoomInviteRequest.MaxPerRequest))
         {
@@ -1206,6 +1231,15 @@ public sealed class MainForm : Form
         string max = room.MaxUsers > 0 ? $"/{room.MaxUsers}" : "";
         string kind = room.IsPrivate ? "비공개 · " : "";
         window.SetHeader(room.Name, $"{kind}멤버 {room.MemberCount}{max}명 · 접속 {room.OnlineCount}명 · 방장 {room.OwnerName}");
+    }
+
+    /// <summary>방장·관리자: 방 정원(최대 인원) 바꾸기.</summary>
+    private void ChangeRoomCapacity(int roomId, IWin32Window owner)
+    {
+        if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
+        using var form = new RoomCapacityForm(room.Name, room.MaxUsers, room.MemberCount);
+        if (form.ShowDialog(owner) != DialogResult.OK || form.Capacity == room.MaxUsers) return;
+        _client.Send(Packet.Create(PacketType.RoomCapacity, body: form.Capacity.ToString(), target: roomId.ToString()));
     }
 
     private void EditRoomNotice(int roomId, IWin32Window owner)

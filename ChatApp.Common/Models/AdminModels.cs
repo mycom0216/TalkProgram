@@ -171,6 +171,7 @@ public static class AuditActions
     public const string MessageEdit = "MESSAGE_EDIT";
     public const string RoomDelete = "ROOM_DELETE";       // 방장·관리자가 방을 삭제함
     public const string RoomOwner = "ROOM_OWNER";         // 방장이 바뀜 (위임 또는 방장이 나가서 자동)
+    public const string RoomCapacity = "ROOM_CAPACITY";   // 방 정원이 바뀜
     public const string Notice = "NOTICE";
     public const string Denied = "ADMIN_DENIED";      // 관리자가 아닌데 관리 기능을 요청함
     public const string ServerStart = "SERVER_START";
@@ -199,6 +200,7 @@ public static class AuditActions
         MessageEdit => "메시지 수정",
         RoomDelete => "방 삭제",
         RoomOwner => "방장 변경",
+        RoomCapacity => "방 정원 변경",
         Notice => "공지",
         Denied => "권한 없는 관리 시도",
         ServerStart => "서버 시작",
@@ -218,7 +220,7 @@ public static class AuditActions
     /// <summary>화면 필터용 목록.</summary>
     public static readonly string[] All =
     [
-        LoginOk, LoginFail, Logout, Register, PasswordChange, FileUpload, FileDownload, RoomCreate, RoomDelete, RoomOwner, MessageDelete, MessageEdit, Notice, Denied, ServerStart,
+        LoginOk, LoginFail, Logout, Register, PasswordChange, FileUpload, FileDownload, RoomCreate, RoomDelete, RoomOwner, RoomCapacity, MessageDelete, MessageEdit, Notice, Denied, ServerStart,
         "APPROVE", "REJECT", "SUSPEND", "RESIGN", "ACTIVATE", "UNLOCK", "RESET_PASSWORD", "KICK", "GRANT_ADMIN", "REVOKE_ADMIN",
     ];
 }

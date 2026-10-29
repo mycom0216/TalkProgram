@@ -36,8 +36,8 @@ public sealed class Room(int id, string name, string? ownerNo, string? ownerName
     public string? OwnerName { get; internal set; } = ownerName;
     public string PinnedNotice { get; internal set; } = "";
 
-    /// <summary>최대 인원 (0 = 제한 없음). 멤버 수 기준.</summary>
-    public int MaxUsers { get; } = maxUsers;
+    /// <summary>최대 인원 (0 = 제한 없음). 멤버 수 기준. 방장·관리자가 바꿀 수 있다(RoomManager의 lock 안에서만).</summary>
+    public int MaxUsers { get; internal set; } = maxUsers;
 
     /// <summary>비공개 방: 목록에는 멤버에게만 보이고, 초대로만 들어올 수 있다.</summary>
     public bool IsPrivate { get; } = isPrivate;

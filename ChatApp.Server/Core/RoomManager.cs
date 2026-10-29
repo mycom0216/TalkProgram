@@ -242,6 +242,17 @@ public sealed class RoomManager
         }
     }
 
+    /// <summary>방 정원 바꾸기. 지금 멤버 수보다 작으면 false (이미 들어온 사람을 내보내지 않는다).</summary>
+    public bool SetMaxUsers(Room room, int maxUsers)
+    {
+        lock (_lock)
+        {
+            if (room.IsLobby || maxUsers < room.Members.Count) return false;
+            room.MaxUsers = maxUsers;
+            return true;
+        }
+    }
+
     /// <summary>방장이 나갔을 때 다음 방장: 가장 먼저 들어온 멤버 (없으면 null).</summary>
     public RoomMember? PickNextOwner(Room room)
     {

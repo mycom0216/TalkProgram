@@ -105,6 +105,7 @@ public sealed class PacketHandler
                 case PacketType.RoomDelete: _roomService.HandleDelete(session, packet); break;
                 case PacketType.RoomTransferOwner: _roomService.HandleTransferOwner(session, packet); break;
                 case PacketType.RoomNotice: _roomService.HandleNotice(session, packet); break;
+                case PacketType.RoomCapacity: _roomService.HandleCapacity(session, packet); break;
 
                 // 파일
                 case PacketType.FileUploadReq: _files.HandleUploadRequest(session, packet); break;

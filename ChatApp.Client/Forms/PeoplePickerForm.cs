@@ -39,6 +39,13 @@ public sealed class PeoplePickerForm : Form
     private readonly CheckBox _selectAll = new() { Text = "전체 선택", Dock = DockStyle.Top, Height = 28, Visible = false };
     private bool _syncingSelectAll; // 개별 체크에 맞춰 [전체 선택] 표시만 바꾸는 중 (그때는 일괄 선택을 하지 않는다)
     private int _maxSelect = int.MaxValue; // 한 번에 고를 수 있는 최대 인원 (방 남은 자리)
+    private readonly string _okText;
+
+    /// <summary>
+    /// 남은 자리보다 많이 골랐을 때 물어볼 함수 (방장·관리자만 줌). 고른 인원을 받아 true면 그대로 진행한다(호출한 쪽이 정원을 늘린다).
+    /// 없으면 남은 자리보다 많이 고르면 [초대]가 꺼진다.
+    /// </summary>
+    public Func<int, bool>? ConfirmOverLimit { get; set; }
     private bool _received; // 서버에서 목록을 받았는지 (받기 전의 0명과 진짜 0명을 구분)
     private readonly string? _hint; // 한 명 고르기의 안내 문구 (없으면 1:1 안내)
 
@@ -75,7 +82,7 @@ public sealed class PeoplePickerForm : Form
         _list.Columns.Add("이름", LogicalToDeviceUnits(140));
         _list.Columns.Add("부서", LogicalToDeviceUnits(130));
         _list.Columns.Add("사원번호", LogicalToDeviceUnits(110));
-        _maxSelect = Math.Max(1, maxSelect);
+        _maxSelect = Math.Max(0, maxSelect);
         _selectAll.Visible = multiSelect;
         _selectAll.CheckedChanged += (_, _) => { if (!_syncingSelectAll) SetAllVisible(_selectAll.Checked); };
         _list.ItemChecked += (_, e) =>
@@ -89,7 +96,9 @@ public sealed class PeoplePickerForm : Form
 
         _filter.TextChanged += (_, _) => Fill();
 
-        _ok = UiHelper.CreateButton(okText ?? (multiSelect ? "초대" : "대화하기"), primary: true);
+        _okText = okText ?? (multiSelect ? "초대" : "대화하기");
+        _ok = UiHelper.CreateButton(_okText, primary: true);
+        _ok.Name = "PickerOk";
         var cancel = UiHelper.CreateButton("취소");
         _ok.Enabled = false;
         _ok.Click += (_, _) => Accept();
@@ -200,9 +209,19 @@ public sealed class PeoplePickerForm : Form
                 _ok.Enabled = false;
                 return;
             }
-            _status.Text = $"{_list.Items.Count}명 표시 · {_checked.Count}명 선택" +
-                           (_checked.Count > _maxSelect ? $" (방에 남은 자리는 {_maxSelect}명입니다)" : "");
-            _ok.Enabled = _checked.Count > 0 && _checked.Count <= _maxSelect;
+            bool over = _checked.Count > _maxSelect;
+            bool canRaise = ConfirmOverLimit is not null;
+            _status.Text = $"{_list.Items.Count}명 표시 · {_checked.Count}명 선택" + (!over ? ""
+                : canRaise ? $" · 남은 자리 {_maxSelect}명 → 정원을 늘려 초대할 수 있어요"
+                : $" · 남은 자리는 {_maxSelect}명입니다. {_checked.Count - _maxSelect}명을 빼 주세요 (정원은 방장이 바꿀 수 있어요)");
+            _status.ForeColor = over && !canRaise ? UiHelper.Danger : UiHelper.Muted;
+            _ok.Enabled = _checked.Count > 0 && (!over || canRaise);
+            string okText = over && canRaise ? "정원 늘리고 초대" : _okText;
+            if (_ok.Text != okText)
+            {
+                _ok.Text = okText;
+                _ok.Width = Math.Max(_ok.Width, TextRenderer.MeasureText(okText, _ok.Font).Width + LogicalToDeviceUnits(28));
+            }
 
             // [전체 선택] 표시를 지금 상태에 맞춘다: 보이는 사람이 모두 선택됐을 때만 체크
             bool allVisible = _list.Items.Count > 0 && _list.Items.Cast<ListViewItem>().All(i => i.Checked);
@@ -225,6 +244,11 @@ public sealed class PeoplePickerForm : Form
             ? _all.Where(u => _checked.Contains(u.EmployeeNo)).ToList()
             : _list.SelectedItems.Cast<ListViewItem>().Select(i => (UserInfo)i.Tag!).Take(1).ToList();
         if (Selected.Count == 0) return;
+        if (_multi && Selected.Count > _maxSelect)
+        {
+            // 방장·관리자면 정원을 늘릴지 묻고, 아니면 여기까지 오지 않는다(버튼이 꺼져 있음)
+            if (ConfirmOverLimit is null || !ConfirmOverLimit(Selected.Count)) return;
+        }
         DialogResult = DialogResult.OK;
         Close();
     }
