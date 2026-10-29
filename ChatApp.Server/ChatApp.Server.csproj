@@ -13,13 +13,14 @@
 
   <ItemGroup>
     <!-- MariaDB / MySQL 드라이버 -->
-    <PackageReference Include="MySqlConnector" Version="2.4.0" />
+    <PackageReference Include="MySqlConnector" Version="2.6.1" />
     <PackageReference Include="System.DirectoryServices.Protocols" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- 실행 폴더(bin)로 설정 파일 복사. appsettings.json은 .gitignore 대상 -->
-    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+    <!-- [왜] 게시(publish) 폴더에는 개발 PC의 DB 비밀번호가 든 appsettings.json을 넣지 않는다. 서버 PC에서 예시를 복사해 만든다. -->
   </ItemGroup>
 
 </Project>
