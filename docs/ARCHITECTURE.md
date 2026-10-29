@@ -65,42 +65,38 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph Core["Core (연결·방 관리)"]
-        CS["ChatServer<br/>시작·종료, Accept, 하트비트"]
+    subgraph Core["Core · 연결과 메모리 상태"]
+        direction LR
+        CS["ChatServer<br/>시작·종료, Accept, 하트비트"] --> SES["ClientSession<br/>연결 1개 = 수신·송신 스레드"]
         SM["SessionManager<br/>접속자 목록"]
-        SES["ClientSession<br/>연결 1개 = 수신·송신 스레드"]
         RM["RoomManager / Room<br/>방·멤버·접속 중 연결"]
         RL["RateLimiter<br/>로그인·가입 속도 제한"]
+        SES ~~~ SM ~~~ RM ~~~ RL
     end
-    subgraph Services["Services (업무 처리)"]
-        PH["PacketHandler<br/>패킷 종류별로 나눠 줌"]
+    PH["PacketHandler<br/>패킷 종류별로 나눠 줌"]
+    subgraph Services["Services · 업무 규칙"]
+        direction LR
         AUTH["AuthService<br/>가입·로그인·토큰·LDAP"]
-        MSG["MessageService<br/>채팅·1:1·댓글·공감·삭제·수정·검색"]
-        ROOM["RoomService<br/>방 만들기·초대·나가기·방장·공지·삭제"]
-        FILE["FileService<br/>파일 올리기·내려받기"]
-        ADM["AdminService<br/>승인·정지·퇴사·비밀번호 초기화·통계"]
-        STORE["MessageStore<br/>DB 작업 큐 (DbWriter 스레드)"]
-        AUD["AuditLog<br/>감사 기록 큐 (AuditWriter 스레드)"]
+        MSG["MessageService<br/>채팅·댓글·공감·삭제·수정·검색"]
+        ROOM["RoomService<br/>방·초대·방장·정원·공지·삭제"]
+        FILE["FileService<br/>파일 올리기·받기"]
+        ADM["AdminService<br/>회원 관리·통계"]
+        AUTH ~~~ MSG ~~~ ROOM ~~~ FILE ~~~ ADM
+    end
+    subgraph Workers["전용 스레드 · 큐로 받아 천천히 처리"]
+        direction LR
+        STORE["MessageStore<br/>DbWriter 스레드"]
+        AUD["AuditLog<br/>AuditWriter 스레드"]
         RET["RetentionService<br/>보관 기간 정리"]
+        STORE ~~~ AUD ~~~ RET
     end
-    subgraph Data["Data (DB 접근)"]
-        REPO["UserRepository · RoomRepository · MessageRepository<br/>FileRepository · AuditRepository"]
-    end
+    REPO[("Data · SQL만<br/>User · Room · Message · File · Audit Repository")]
 
-    CS --> SES
-    SES --> PH
-    PH --> AUTH & MSG & ROOM & FILE & ADM
-    MSG --> STORE
-    ROOM --> REPO
-    AUTH --> REPO
-    FILE --> REPO
-    ADM --> REPO
-    STORE --> REPO
-    AUD --> REPO
-    RET --> REPO
-    MSG --> RM
-    ROOM --> RM
-    PH --> SM
+    Core -- "받은 패킷" --> PH
+    PH --> Services
+    Services -- "느린 일은 큐에 넣고 바로 돌아감" --> Workers
+    Services -- "권한·방 확인" --> REPO
+    Workers -- "묶어서 저장" --> REPO
 ```
 
 계층 규칙: **Core**는 연결과 메모리 상태만, **Services**는 업무 규칙, **Data**는 SQL만 다룬다. 화면이 없으므로 서버는 리눅스에서도 돈다(테스트·부하 측정은 리눅스 VM에서 했다).
@@ -153,28 +149,31 @@ sequenceDiagram
 ## 5. 클라이언트 구조
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph UI["UI 스레드 (화면은 여기서만 바뀐다)"]
+        direction TB
         LF["LoginForm"] --> MF["MainForm<br/>동료·방 목록, 트레이, 알림"]
         MF --> CW["ChatWindow<br/>대화창 (방·1:1)"]
+        MF --> ETC["AdminForm · SearchForm<br/>PeoplePickerForm · RoomFilesForm<br/>ImageViewerForm"]
         CW --> BV["BubbleChatView<br/>말풍선 직접 그리기"]
         CW --> TF["ThreadForm<br/>댓글 창"]
-        MF --> ETC["AdminForm · SearchForm · PeoplePickerForm<br/>RoomFilesForm · ImageViewerForm"]
         CONV[("Conversation<br/>대화 데이터 (창과 분리)")]
     end
     subgraph NET["ChatClient (통신)"]
+        direction LR
         RCV["Receive 스레드"]
         SND["Send 스레드<br/>일반 큐 + 대량 큐"]
         HB["Heartbeat 스레드<br/>15초마다 Ping"]
+        RCV ~~~ SND ~~~ HB
     end
-    FTS["FileTransferService<br/>업로드 스레드(3개씩) · 내려받기 대기열(3개씩)"]
+    FTS["FileTransferService<br/>올리기 3개씩 · 받기 대기열 3개씩"]
 
-    RCV -- "BeginInvoke" --> MF
-    RCV -- "파일 조각은 바로 디스크에" --> FTS
-    MF -- "Send()" --> SND
-    FTS -- "SendBulk()" --> SND
     MF --> CONV
-    CONV -- "ItemAdded / ItemChanged 이벤트" --> CW
+    CONV -- "ItemAdded / ItemChanged" --> CW
+    NET -- "받은 패킷: BeginInvoke로 UI 스레드에" --> UI
+    UI -- "Send(): 일반 큐" --> NET
+    NET -- "파일 조각은 수신 스레드에서 바로 디스크에" --> FTS
+    FTS -- "SendBulk(): 대량 큐" --> NET
 ```
 
 - **화면과 데이터를 나눴다.** 대화 내용은 `Conversation`에 있고 창은 보여 주기만 한다. 창을 닫았다 열어도 대화가 남고, 창이 닫혀 있어도 안 읽은 수가 쌓인다.
@@ -264,6 +263,7 @@ sequenceDiagram
 
 ```mermaid
 erDiagram
+    direction LR
     users ||--o{ room_members : "멤버"
     users ||--o{ messages : "보냄"
     users ||--o{ files : "올림"
