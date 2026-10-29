@@ -1832,6 +1832,7 @@ public sealed class MainForm : Form
             reply.ReplyTo!.Text = "삭제된 메시지입니다.";
             conv.NotifyChanged(reply);
         }
+        conv.RecountReplies(); // 지워진 것이 댓글이었다면 원래 메시지의 "↳ 댓글 N"이 줄어든다
     }
 
     private void HandleMessageEdited(Packet packet)
@@ -2123,6 +2124,7 @@ public sealed class MainForm : Form
         var others = _users.Where(u => u.EmployeeNo != _me.EmployeeNo).ToList();
         var items = new List<CardItem>();
         foreach (var dept in others.GroupBy(u => u.Department).OrderBy(g => g.Key))
+
         {
             items.Add(new CardItem { IsHeader = true, Key = $"dept:{dept.Key}", Title = $"{dept.Key} ({dept.Count()})" });
             foreach (UserInfo user in dept.OrderBy(u => u.Name))

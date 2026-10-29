@@ -34,6 +34,20 @@ internal sealed class ChatItem
     /// <summary>이 메시지를 아직 안 읽은 사람 수 (카카오톡의 노란 숫자). 0이면 표시하지 않는다.</summary>
     public int UnreadCount { get; set; }
 
+    /// <summary>이 메시지에 달린 댓글 수 (말풍선 아래 "↳ 댓글 N"). Conversation이 계산해 넣는다.</summary>
+    public int ReplyCount { get; set; }
+
+    /// <summary>
+    /// 다른 화면(댓글 창)에 보여 줄 복사본. 말풍선마다 화면 배치 좌표를 갖고 있어서,
+    /// 같은 객체를 두 화면이 같이 쓰면 위치가 꼬인다 → 내용만 복사한 새 객체를 만든다.
+    /// </summary>
+    public ChatItem CloneForView() => new()
+    {
+        Kind = Kind, Sender = Sender, SenderKey = SenderKey, Text = Text, Time = Time, MessageId = MessageId,
+        ReplyTo = ReplyTo, Deleted = Deleted, Edited = Edited, Reactions = Reactions, UnreadCount = UnreadCount,
+        ReplyCount = ReplyCount, File = File, Mentioned = Mentioned,
+    };
+
     /// <summary>화면에 보일 글 (삭제됐으면 안내 문구).</summary>
     public string DisplayText => Deleted ? "삭제된 메시지입니다." : Edited ? Text + "  (수정됨)" : Text;
 
@@ -52,6 +66,7 @@ internal sealed class ChatItem
     internal bool ShowHeader;
     internal Rectangle Bubble, TextRect, AvatarRect, NameRect, TimeRect, QuoteRect;
     internal readonly List<(Rectangle Rect, string Emoji)> ReactionChips = [];
+    internal Rectangle ThreadChip; // "↳ 댓글 N" 칩 (없으면 Empty)
 
     public bool IsSystemLike => Kind is ChatItemKind.System or ChatItemKind.Notice or ChatItemKind.Error;
 }
@@ -71,7 +86,7 @@ internal sealed class BubbleChatView : UserControl
     private readonly ContextMenuStrip _fileMenu = new();
     private readonly ContextMenuStrip _messageMenu = new();
     private ToolStripItem? _showInFolderItem, _cancelItem;
-    private ToolStripItem? _replyItem, _reactItem, _deleteItem, _copyTextItem, _editItem;
+    private ToolStripItem? _replyItem, _reactItem, _deleteItem, _copyTextItem, _editItem, _threadItem;
     private ChatItem? _menuItem; // 메뉴를 연 말풍선
 
     /// <summary>파일 말풍선 클릭(열기) 또는 오른쪽 클릭 메뉴.</summary>
@@ -79,6 +94,13 @@ internal sealed class BubbleChatView : UserControl
 
     /// <summary>메시지 메뉴 → 답장.</summary>
     public event Action<ChatItem>? ReplyRequested;
+
+    /// <summary>"↳ 댓글 N" 칩 또는 메뉴 → 그 메시지의 댓글 창 열기.</summary>
+    public event Action<ChatItem>? ThreadRequested;
+
+    /// <summary>false면 댓글 칩을 그리지 않는다 (댓글 창 안에서는 이미 그 댓글들을 보고 있으므로).</summary>
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShowThreadChips { get; set; } = true;
 
     /// <summary>공감 누르기/취소 (메뉴에서 고르거나, 말풍선 아래 공감 칩을 클릭).</summary>
     public event Action<ChatItem, string>? ReactionRequested;
@@ -119,7 +141,8 @@ internal sealed class BubbleChatView : UserControl
         _fileMenu.Items.Add("대화 내용 복사", null, (_, _) => CopyAll());
 
         // 글 말풍선 오른쪽 클릭: 답장 / 공감 ▸ / 복사 / 삭제
-        _replyItem = _messageMenu.Items.Add("답장", null, (_, _) => { if (_menuItem is not null) ReplyRequested?.Invoke(_menuItem); });
+        _replyItem = _messageMenu.Items.Add("댓글 달기", null, (_, _) => { if (_menuItem is not null) ReplyRequested?.Invoke(_menuItem); });
+        _threadItem = _messageMenu.Items.Add("댓글 보기", null, (_, _) => { if (_menuItem is not null) ThreadRequested?.Invoke(_menuItem); });
         var react = new ToolStripMenuItem("공감");
         foreach (string emoji in ReactionRequest.Allowed)
             react.DropDownItems.Add(emoji, null, (_, _) => { if (_menuItem is not null) ReactionRequested?.Invoke(_menuItem, emoji); });
@@ -337,21 +360,31 @@ internal sealed class BubbleChatView : UserControl
         return new Size(width + S(24), quoteHeight + textSize.Height + S(14));
     }
 
-    private static string QuoteTitle(ReplyInfo reply) => $"↳ {reply.SenderName}에게 답장";
+    private static string QuoteTitle(ReplyInfo reply) => $"↳ {reply.SenderName}에게 댓글";
+
+    private static string ThreadText(ChatItem item) => $"↳ 댓글 {item.ReplyCount}";
 
     /// <summary>말풍선 아래 공감 칩 배치. 칩 줄의 높이(없으면 0)를 돌려준다.</summary>
     private int LayoutReactions(ChatItem item, bool alignRight)
     {
         item.ReactionChips.Clear();
-        if (item.Deleted || item.Reactions.Count == 0) return 0;
+        item.ThreadChip = Rectangle.Empty;
+        // 댓글 칩: 지워진 메시지에도 댓글은 남아 있을 수 있으므로 보여 준다 (카카오톡과 같음)
+        bool thread = ShowThreadChips && item.ReplyCount > 0;
+        List<(string Emoji, int Width)> sizes = item.Deleted ? [] : item.Reactions.Where(r => r.EmployeeNos.Count > 0)
+            .Select(r => (r.Emoji, TextRenderer.MeasureText(ChipText(r), Theme.Small).Width + S(12))).ToList();
+        if (sizes.Count == 0 && !thread) return 0;
 
         int h = S(22), gap = S(4);
-        var sizes = item.Reactions.Where(r => r.EmployeeNos.Count > 0)
-            .Select(r => (r.Emoji, Width: TextRenderer.MeasureText(ChipText(r), Theme.Small).Width + S(12))).ToList();
-        if (sizes.Count == 0) return 0;
-        int total = sizes.Sum(c => c.Width) + gap * (sizes.Count - 1);
+        int threadWidth = thread ? TextRenderer.MeasureText(ThreadText(item), Theme.SmallBold).Width + S(14) : 0;
+        int total = sizes.Sum(c => c.Width) + gap * Math.Max(0, sizes.Count - 1) + (thread ? threadWidth + (sizes.Count > 0 ? gap : 0) : 0);
         int x = alignRight ? item.Bubble.Right - total : item.Bubble.X;
         int y = item.Bubble.Bottom + S(3);
+        if (thread)
+        {
+            item.ThreadChip = new Rectangle(x, y, threadWidth, h); // 댓글 칩이 맨 앞 (카카오톡처럼)
+            x += threadWidth + gap;
+        }
         foreach (var (emoji, w) in sizes)
         {
             item.ReactionChips.Add((new Rectangle(x, y, w, h), emoji));
@@ -393,6 +426,18 @@ internal sealed class BubbleChatView : UserControl
         return null;
     }
 
+    /// <summary>그 위치의 "↳ 댓글 N" 칩.</summary>
+    private ChatItem? HitThread(Point location)
+    {
+        Point p = ToContent(location);
+        foreach (ChatItem item in _items)
+        {
+            if (item.Y > p.Y) break;
+            if (!item.ThreadChip.IsEmpty && item.ThreadChip.Contains(p)) return item;
+        }
+        return null;
+    }
+
     private ChatItem? HitQuote(Point location)
     {
         Point p = ToContent(location);
@@ -402,7 +447,8 @@ internal sealed class BubbleChatView : UserControl
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        bool hand = HitFile(e.Location) is not null || HitReaction(e.Location) is not null || HitQuote(e.Location) is not null;
+        bool hand = HitFile(e.Location) is not null || HitReaction(e.Location) is not null || HitQuote(e.Location) is not null
+                    || HitThread(e.Location) is not null;
         Cursor = hand ? Cursors.Hand : Cursors.Default;
     }
 
@@ -410,6 +456,11 @@ internal sealed class BubbleChatView : UserControl
     {
         base.OnMouseClick(e);
         if (e.Button != MouseButtons.Left) return;
+        if (HitThread(e.Location) is ChatItem threadRoot)
+        {
+            ThreadRequested?.Invoke(threadRoot);
+            return;
+        }
         if (HitReaction(e.Location) is var (reacted, emoji))
         {
             ReactionRequested?.Invoke(reacted, emoji); // 같은 이모지를 다시 누르면 서버가 취소로 처리한다
@@ -429,7 +480,7 @@ internal sealed class BubbleChatView : UserControl
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        // 글 말풍선 더블클릭 = 답장 (자주 쓰는 동작을 빠르게)
+        // 글 말풍선 더블클릭 = 댓글 달기 (자주 쓰는 동작을 빠르게)
         if (e.Button == MouseButtons.Left && HitBubble(e.Location) is { File: null, CanInteract: true } item)
             ReplyRequested?.Invoke(item);
     }
@@ -450,6 +501,8 @@ internal sealed class BubbleChatView : UserControl
         {
             bool interact = _menuItem.CanInteract;
             _replyItem!.Enabled = interact;
+            _threadItem!.Visible = ShowThreadChips && _menuItem.ReplyCount > 0;
+            _threadItem.Text = $"댓글 보기 ({_menuItem.ReplyCount})";
             _reactItem!.Enabled = interact;
             _copyTextItem!.Enabled = !_menuItem.Deleted;
             _deleteItem!.Visible = interact && (CanDelete?.Invoke(_menuItem) ?? false);
@@ -591,6 +644,7 @@ internal sealed class BubbleChatView : UserControl
                 Theme.FillRounded(g, Color.FromArgb(203, 213, 225), bubble, S(14));
                 TextRenderer.DrawText(g, item.DisplayText, Theme.Body, text, Theme.SubText, WrapFlags);
                 DrawTime(g, item, dy);
+                DrawReactions(g, item, dy); // 지워진 메시지에 남은 댓글 칩
                 break;
 
             case ChatItemKind.Mine:
@@ -619,6 +673,7 @@ internal sealed class BubbleChatView : UserControl
                     Theme.DrawRounded(g, Theme.Border, bubble, S(14));
                     TextRenderer.DrawText(g, item.DisplayText, Theme.Body, text, Theme.SubText, WrapFlags);
                     DrawTime(g, item, dy);
+                    DrawReactions(g, item, dy);
                     break;
                 }
                 Theme.FillRounded(g, item.Mentioned ? Theme.MentionBack : Theme.Surface, bubble, S(14));
@@ -743,9 +798,17 @@ internal sealed class BubbleChatView : UserControl
         g.DrawLine(pen, q.X, q.Bottom - S(2), q.Right, q.Bottom - S(2));
     }
 
-    /// <summary>말풍선 아래 공감 칩 "👍 2". 내가 누른 공감은 파란 테두리로.</summary>
+    /// <summary>말풍선 아래 "↳ 댓글 N" 칩과 공감 칩 "👍 2". 내가 누른 공감은 파란 테두리로.</summary>
     private void DrawReactions(Graphics g, ChatItem item, int dy)
     {
+        if (!item.ThreadChip.IsEmpty)
+        {
+            Rectangle t = Shift(item.ThreadChip, dy);
+            Theme.FillRounded(g, Theme.Surface, t, t.Height / 2f);
+            Theme.DrawRounded(g, Theme.Border, t, t.Height / 2f);
+            TextRenderer.DrawText(g, ThreadText(item), Theme.SmallBold, t, Theme.Primary,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+        }
         foreach (var (rect, emoji) in item.ReactionChips)
         {
             ReactionInfo? info = item.Reactions.FirstOrDefault(r => r.Emoji == emoji);

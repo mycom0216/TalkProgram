@@ -202,6 +202,7 @@ internal sealed class ChatWindow : Form
             // [주의] 이벤트 구독은 "Conversation → 이 창"으로 참조를 만든다. 구독을 해제하지 않으면
             //        Conversation이 살아 있는 한 닫힌 창도 가비지 컬렉터가 회수하지 못한다(메모리 누수).
             //        게다가 닫힌(Dispose된) 창의 _view에 그리려다 ObjectDisposedException이 날 수도 있다.
+            foreach (ThreadForm thread in _threads.Values.ToList()) thread.Close(); // 대화창을 닫으면 댓글 창도 닫는다
             conversation.ItemAdded -= OnItemAdded;
             conversation.ItemChanged -= OnItemChanged;
             conversation.Reloaded -= OnReloaded;
@@ -216,6 +217,7 @@ internal sealed class ChatWindow : Form
         // [개념] 람다 캡처(closure): 람다 안에서 쓴 this는 람다가 만들어질 때의 이 창을 계속 가리킨다.
         _view.FileCommandRequested += (item, command) => FileCommandRequested?.Invoke(this, item, command);
         _view.ReplyRequested += BeginReply;
+        _view.ThreadRequested += OpenThread;
         _view.ReactionRequested += (item, emoji) => ReactionRequested?.Invoke(this, item, emoji);
         _view.DeleteRequested += item => DeleteRequested?.Invoke(this, item);
         _view.EditRequested += item => EditRequested?.Invoke(this, item);
@@ -654,9 +656,42 @@ internal sealed class ChatWindow : Form
     /// <summary>말풍선 화면 설정: 내 사원번호(내 공감 강조)와 삭제 가능 여부 판단 함수.</summary>
     public void SetViewOptions(string myKey, Func<ChatItem, bool> canDelete, Func<ChatItem, bool> canEdit)
     {
+        _myKey = myKey;
+        _canDelete = canDelete;
+        _canEdit = canEdit;
         _view.MyKey = myKey;
         _view.CanDelete = canDelete;
         _view.CanEdit = canEdit;
+    }
+
+    // ───────── 댓글 창 ─────────
+
+    private string _myKey = "";
+    private Func<ChatItem, bool> _canDelete = _ => false;
+    private Func<ChatItem, bool> _canEdit = _ => false;
+    private readonly Dictionary<long, ThreadForm> _threads = []; // 원래 메시지 번호 → 열린 댓글 창 (메시지마다 하나)
+
+    /// <summary>"↳ 댓글 N"을 누름 → 그 메시지의 댓글 창을 연다 (이미 열려 있으면 앞으로).</summary>
+    private void OpenThread(ChatItem root)
+    {
+        if (root.MessageId <= 0) return;
+        if (_threads.TryGetValue(root.MessageId, out ThreadForm? open) && !open.IsDisposed)
+        {
+            if (open.WindowState == FormWindowState.Minimized) open.WindowState = FormWindowState.Normal;
+            open.Activate();
+            return;
+        }
+        var thread = new ThreadForm(Conversation, root, _headerTitle, _myKey, _canDelete, _canEdit);
+        long rootId = root.MessageId;
+        // 댓글 창에서 보낸 글 = 원래 메시지에 대한 댓글 (대화창의 [댓글 달기]와 같은 패킷)
+        thread.SendRequested += text => SendRequested?.Invoke(this, text, rootId);
+        thread.ReactionRequested += (item, emoji) => ReactionRequested?.Invoke(this, item, emoji);
+        thread.DeleteRequested += item => DeleteRequested?.Invoke(this, item);
+        thread.EditRequested += item => EditRequested?.Invoke(this, item);
+        thread.FormClosed += (_, _) => _threads.Remove(rootId);
+        thread.SetInputEnabled(_input.Enabled);
+        _threads[rootId] = thread;
+        thread.Show(this);
     }
 
     // ───────── 답장 ─────────
@@ -668,7 +703,7 @@ internal sealed class ChatWindow : Form
         _replyTo = item;
         string who = item.Kind == ChatItemKind.Mine ? "나" : item.Sender;
         string preview = item.File is not null ? item.Text : item.Text.ReplaceLineEndings(" ");
-        _replyLabel.Text = $"↳ {who}에게 답장: {preview}";
+        _replyLabel.Text = $"↳ {who}에게 댓글: {preview}";
         _replyBar.Visible = true;
         _input.Focus();
     }
@@ -688,6 +723,7 @@ internal sealed class ChatWindow : Form
             TypingActivity?.Invoke(this, false);
         }
         _input.Enabled = enabled;
+        foreach (ThreadForm thread in _threads.Values) thread.SetInputEnabled(enabled);
         _sendButton.Enabled = enabled;
         _emoticonButton.Enabled = enabled;
         _attachButton.Enabled = enabled;

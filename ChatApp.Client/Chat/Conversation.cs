@@ -86,7 +86,41 @@ internal sealed class Conversation(string key, string title)
         Items.Add(item);
         // [개념] ?.Invoke : 구독자가 있을 때만 호출(null이면 아무 일도 안 함). 창이 닫혀 있으면 구독자가 없다.
         ItemAdded?.Invoke(item);
+
+        // 댓글이면 원래 메시지의 "↳ 댓글 N"을 하나 올린다
+        if (item.ReplyTo is { } reply && !item.Deleted && FindMessage(reply.MessageId) is { } root && root != item)
+        {
+            root.ReplyCount++;
+            NotifyChanged(root);
+        }
     }
+
+    // ───────── 댓글 수 ─────────
+
+    /// <summary>
+    /// 모든 말풍선의 댓글 수를 다시 센다 (지난 대화를 넣은 뒤, 댓글이 지워진 뒤). 값이 바뀐 말풍선은 창에 알린다.
+    /// [왜] 서버에 따로 묻지 않고 지금 불러온 대화에서 센다: 불러온 범위는 항상 "어느 시점 ~ 지금"이라
+    ///      원래 메시지가 보이면 그 뒤에 달린 댓글도 모두 불러와져 있다.
+    /// </summary>
+    public void RecountReplies(bool notify = true)
+    {
+        var counts = new Dictionary<long, int>();
+        foreach (ChatItem item in Items)
+            if (item.ReplyTo is { } reply && !item.Deleted)
+                counts[reply.MessageId] = counts.GetValueOrDefault(reply.MessageId) + 1;
+        foreach (ChatItem item in Items)
+        {
+            if (item.MessageId <= 0) continue;
+            int count = counts.GetValueOrDefault(item.MessageId);
+            if (item.ReplyCount == count) continue;
+            item.ReplyCount = count;
+            if (notify) NotifyChanged(item);
+        }
+    }
+
+    /// <summary>그 메시지와 거기 달린 댓글들 (시간 순서). 댓글 창이 쓴다.</summary>
+    public List<ChatItem> GetThread(long rootId)
+        => Items.Where(i => i.MessageId == rootId || i.ReplyTo?.MessageId == rootId).ToList();
 
     /// <summary>파일 진행률·상태처럼 이미 있는 말풍선의 내용이 바뀌었을 때.</summary>
     public event Action<ChatItem>? ItemChanged;
@@ -180,6 +214,7 @@ internal sealed class Conversation(string key, string title)
 
         Items.Clear();
         Items.AddRange(merged);
+        RecountReplies(notify: false); // 지난 대화 속 댓글까지 세고, 창은 아래 Reloaded로 한꺼번에 다시 그린다
         Reloaded?.Invoke();
         return fresh.Count;
     }
