@@ -57,6 +57,7 @@ public sealed class MainForm : Form
     private readonly Panel _userPanel = new();          // 동료 목록 + [친구 추가]
     private readonly Button _addFriendButton = new();
     private AddFriendForm? _addFriendForm;
+    private ProfileCardForm? _profileCard;
     private readonly AvatarCache _avatars;               // 프로필 사진 (메모리 + 디스크 캐시)
     private readonly System.Windows.Forms.Timer _photoRefresh = new() { Interval = 150 }; // 사진이 한꺼번에 와도 한 번만 다시 그리기
     private bool _openRoomOnJoin;   // 내가 방을 고르거나 만든 경우에만 입장 후 창을 띄운다 (로그인 때 기본 방은 안 띄움)
@@ -148,7 +149,11 @@ public sealed class MainForm : Form
         _statusMessage = _me.StatusMessage;
         BuildStatusMenu();
         _header.Cursor = Cursors.Hand;
-        _header.MouseClick += (_, e) => { if (_connected) _statusMenu.Show(_header, e.Location); };
+        _header.MouseClick += (_, e) =>
+        {
+            if (HeaderAvatarRect().Contains(e.Location)) ShowProfile(_me); // 내 사진을 누르면 내 프로필 카드
+            else if (_connected) _statusMenu.Show(_header, e.Location);
+        };
         _idleTimer.Tick += (_, _) => CheckIdle();
         _idleTimer.Start();
 
@@ -240,6 +245,13 @@ public sealed class MainForm : Form
         Controls.Add(_statusLabel);
         _userPanel.BringToFront();
         _roomPanel.BringToFront();
+    }
+
+    /// <summary>머리 영역의 내 사진 위치 (그리기와 클릭에 같이 쓴다).</summary>
+    private Rectangle HeaderAvatarRect()
+    {
+        int size = S(56);
+        return new Rectangle(S(16), (_header.Height - size) / 2, size, size);
     }
 
     private void PaintHeader(object? sender, PaintEventArgs e)
@@ -594,6 +606,7 @@ public sealed class MainForm : Form
                 }
                 foreach (RoomInfo room in _joinedRooms.Values) UpdateRoomMentionCandidates(room);
                 RefreshUserList();
+                RefreshProfileCard();
                 break;
 
 
@@ -613,6 +626,7 @@ public sealed class MainForm : Form
                 }
                 if (!string.IsNullOrEmpty(packet.Body)) SetStatus($"● {packet.Body}", Theme.SubText);
                 RefreshUserList();
+                RefreshProfileCard();
                 break;
 
             case PacketType.ProfilePhoto:
@@ -623,10 +637,11 @@ public sealed class MainForm : Form
                 }
                 if (string.Equals(packet.Target, _me.EmployeeNo, StringComparison.OrdinalIgnoreCase) && packet.GetData<PhotoInfo>() is { } mine)
                 {
-                    _me = _me.WithPhoto(mine.Version);
+                    _me = mine.Kind == PhotoKind.Background ? _me.WithBackground(mine.Version) : _me.WithPhoto(mine.Version);
                     _client.Me = _me;
                 }
                 _avatars.Handle(packet);
+                RefreshProfileCard();
                 if (!string.IsNullOrEmpty(packet.Body)) SetStatus($"● {packet.Body}", Theme.SubText);
                 break;
 
@@ -773,6 +788,8 @@ public sealed class MainForm : Form
         _statusMenu.Items.Add("내 휴대폰 번호 설정...", null, (_, _) => EditPhone());
         _statusMenu.Items.Add("프로필 사진 바꾸기...", null, (_, _) => ChangeProfilePhoto());
         _statusMenu.Items.Add("프로필 사진 지우기", null, (_, _) => RemoveProfilePhoto());
+        _statusMenu.Items.Add("배경 사진 바꾸기...", null, (_, _) => UploadPhoto(PhotoKind.Background, this));
+        _statusMenu.Items.Add("내 프로필 보기", null, (_, _) => ShowProfile(_me));
         // [주의] 관리자 메뉴는 로그인할 때 받은 권한(Role)이 ADMIN일 때만 보인다. 이건 화면 편의일 뿐이고,
         //        진짜 권한 확인은 서버가 관리 요청마다 다시 한다(메뉴를 억지로 띄워도 서버가 거절).
         if (_me.IsAdmin)
@@ -846,6 +863,7 @@ public sealed class MainForm : Form
         _statusMessage = form.Message;
         _header.Invalidate();
         _client.Send(Packet.Create(PacketType.StatusUpdate).WithData(new StatusUpdate { Presence = _presence, StatusMessage = _statusMessage }));
+        RefreshProfileCard();
     }
 
     /// <summary>
@@ -2091,86 +2109,131 @@ public sealed class MainForm : Form
         _addFriendForm.Show(this);
     }
 
-    /// <summary>프로필 사진 바꾸기: 사진을 골라 가운데를 정사각형으로 잘라 160×160 JPEG로 줄여 보낸다.</summary>
-    private void ChangeProfilePhoto()
+    // ───────────────────────── 프로필 (사진·배경·카드) ─────────────────────────
+
+    private void ChangeProfilePhoto() => UploadPhoto(PhotoKind.Profile, this);
+    private void RemoveProfilePhoto() => RemovePhoto(PhotoKind.Profile, this);
+
+    /// <summary>사진을 골라 서버에 올린다. 프로필은 가운데 정사각형 160×160, 배경은 세로 3:4 720×960 JPEG로 줄인다.</summary>
+    private void UploadPhoto(PhotoKind kind, IWin32Window owner)
     {
+        string what = kind == PhotoKind.Background ? "배경 사진" : "프로필 사진";
         using var dialog = new OpenFileDialog
         {
-            Title = "프로필 사진 고르기",
+            Title = $"{what} 고르기",
             Filter = "사진 (*.jpg;*.jpeg;*.png;*.bmp;*.gif)|*.jpg;*.jpeg;*.png;*.bmp;*.gif|모든 파일 (*.*)|*.*",
         };
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        if (dialog.ShowDialog(owner) != DialogResult.OK) return;
         byte[]? photo;
         try
         {
-            photo = MakeProfilePhoto(dialog.FileName);
+            photo = kind == PhotoKind.Background
+                ? ImageTools.MakeJpeg(dialog.FileName, ProfileRules.BackgroundWidth, ProfileRules.BackgroundHeight, ProfileRules.MaxBackgroundBytes)
+                : ImageTools.MakeJpeg(dialog.FileName, ProfileRules.PhotoSize, ProfileRules.PhotoSize, ProfileRules.MaxPhotoBytes);
         }
         catch (Exception ex) when (ex is OutOfMemoryException or ArgumentException or IOException or UnauthorizedAccessException)
         {
             // [개념] GDI+는 그림이 아닌 파일을 열면 OutOfMemoryException을 던진다(이름과 달리 "형식 오류" 뜻)
-            MessageBox.Show(this, "사진 파일을 열 수 없습니다. JPG·PNG 사진을 골라 주세요.", Theme.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(owner, "사진 파일을 열 수 없습니다. JPG·PNG 사진을 골라 주세요.", Theme.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
         if (photo is null)
         {
-            MessageBox.Show(this, "사진을 충분히 작게 줄이지 못했습니다. 다른 사진을 골라 주세요.", Theme.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(owner, "사진을 충분히 작게 줄이지 못했습니다. 다른 사진을 골라 주세요.", Theme.AppName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
-        var packet = Packet.Create(PacketType.ProfilePhotoUpdate);
+        var packet = Packet.Create(PacketType.ProfilePhotoUpdate).WithData(new PhotoInfo { Kind = kind });
         packet.Bin = photo;
-        if (_client.Send(packet)) SetStatus("● 프로필 사진을 바꾸는 중...", Theme.SubText);
-        else SetStatus("● 서버와 연결이 끊어져 사진을 바꿀 수 없습니다.", Theme.Danger);
+        if (_client.Send(packet)) SetStatus($"● {what}을 바꾸는 중...", Theme.SubText);
+        else SetStatus($"● 서버와 연결이 끊어져 {what}을 바꿀 수 없습니다.", Theme.Danger);
     }
 
-    private void RemoveProfilePhoto()
+    private void RemovePhoto(PhotoKind kind, IWin32Window owner)
     {
-        if (_me.PhotoVersion <= 0 && _avatars.Get(_me.EmployeeNo) is null)
+        bool background = kind == PhotoKind.Background;
+        string what = background ? "배경 사진" : "프로필 사진";
+        long version = background ? _me.BackgroundVersion : _me.PhotoVersion;
+        if (version <= 0)
         {
-            SetStatus("● 프로필 사진이 없습니다.", Theme.SubText);
+            SetStatus($"● {what}이 없습니다.", Theme.SubText);
             return;
         }
-        if (MessageBox.Show(this, "프로필 사진을 지울까요?\n이름 첫 글자 아바타로 돌아갑니다.", Theme.AppName,
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        _client.Send(Packet.Create(PacketType.ProfilePhotoUpdate)); // Bin 없음 = 지우기
+        string after = background ? "기본 배경으로 돌아갑니다." : "이름 첫 글자 아바타로 돌아갑니다.";
+        if (MessageBox.Show(owner, $"{what}을 지울까요?\n{after}", Theme.AppName, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+        _client.Send(Packet.Create(PacketType.ProfilePhotoUpdate).WithData(new PhotoInfo { Kind = kind })); // Bin 없음 = 지우기
     }
 
-    /// <summary>사진 파일 → 정사각형 160×160 JPEG 바이트. 휴대폰 사진의 회전 정보(EXIF)도 반영한다. 너무 크면 null.</summary>
-    private static byte[]? MakeProfilePhoto(string path)
+    /// <summary>내 정보 (상태·상태 메시지는 메인 창이 따로 들고 있으므로 합쳐서).</summary>
+    private UserInfo MyProfile() => _me.WithStatus(_presence, _statusMessage);
+
+    private static bool SameNo(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>사원번호로 프로필 카드 열기 (말풍선 사진을 눌렀을 때 등).</summary>
+    private void ShowProfileByNo(string employeeNo)
     {
-        using Image source = Image.FromFile(path);
-        // 휴대폰 사진은 픽셀은 눕혀 두고 "회전해서 보라"는 표시(EXIF 0x0112)만 붙어 있는 경우가 많다
-        const int OrientationId = 0x0112;
-        if (source.PropertyIdList.Contains(OrientationId) && source.GetPropertyItem(OrientationId)?.Value is { Length: > 0 } o)
+        if (SameNo(employeeNo, _me.EmployeeNo))
         {
-            source.RotateFlip(o[0] switch
-            {
-                3 => RotateFlipType.Rotate180FlipNone,
-                6 => RotateFlipType.Rotate90FlipNone,
-                8 => RotateFlipType.Rotate270FlipNone,
-                _ => RotateFlipType.RotateNoneFlipNone,
-            });
+            ShowProfile(_me);
+            return;
         }
-        int side = Math.Min(source.Width, source.Height);
-        var crop = new Rectangle((source.Width - side) / 2, (source.Height - side) / 2, side, side); // 가운데 정사각형
-        int size = ProfileRules.PhotoSize;
-        using var bitmap = new Bitmap(size, size);
-        using (Graphics g = Graphics.FromImage(bitmap))
+        UserInfo? user = _users.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo))
+                         ?? _friends.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo))
+                         ?? (_knownPeers.TryGetValue(employeeNo, out UserInfo? known) ? known : null);
+        if (user is not null) ShowProfile(user);
+    }
+
+    /// <summary>프로필 카드 열기 (한 번에 하나만).</summary>
+    private void ShowProfile(UserInfo user)
+    {
+        _profileCard?.Close();
+        bool isMe = SameNo(user.EmployeeNo, _me.EmployeeNo);
+        (UserInfo shown, bool online) = ProfileState(user.EmployeeNo, user);
+        _profileCard = new ProfileCardForm(shown, isMe, !isMe && IsFriend(user.EmployeeNo), online, _avatars);
+        _profileCard.ActionRequested += OnProfileAction;
+        _profileCard.FormClosed += (sender, _) => { if (ReferenceEquals(sender, _profileCard)) _profileCard = null; };
+        _profileCard.Show(this);
+    }
+
+    /// <summary>그 사람의 최신 정보와 접속 여부 (접속자 목록 → 친구 목록 → 알고 있던 정보 순).</summary>
+    private (UserInfo User, bool Online) ProfileState(string employeeNo, UserInfo fallback)
+    {
+        if (SameNo(employeeNo, _me.EmployeeNo)) return (MyProfile(), _connected);
+        UserInfo? online = _users.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo));
+        return (online ?? _friends.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo)) ?? fallback, online is not null);
+    }
+
+    /// <summary>열려 있는 프로필 카드를 최신 정보로 (목록·사진·상태 메시지가 바뀌었을 때).</summary>
+    private void RefreshProfileCard()
+    {
+        if (_profileCard is not { IsDisposed: false } card) return;
+        (UserInfo user, bool online) = ProfileState(card.EmployeeNo, new UserInfo { EmployeeNo = card.EmployeeNo });
+        if (user.Name.Length == 0) return; // 정보를 모르면 그대로 둔다
+        card.UpdateUser(user, !SameNo(card.EmployeeNo, _me.EmployeeNo) && IsFriend(card.EmployeeNo), online);
+    }
+
+    private void OnProfileAction(ProfileAction action, UserInfo user)
+    {
+        IWin32Window owner = _profileCard is { IsDisposed: false } card ? card : this;
+        switch (action)
         {
-            g.Clear(Color.White); // 투명 PNG도 JPEG로 바꿀 때 검게 되지 않게
-            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            g.DrawImage(source, new Rectangle(0, 0, size, size), crop, GraphicsUnit.Pixel);
+            case ProfileAction.Chat:
+                _knownPeers.TryAdd(user.EmployeeNo, user);
+                OpenDirect(user, activate: true);
+                break;
+            case ProfileAction.AddFriend:
+                _client.Send(Packet.Create(PacketType.FriendAdd, body: user.EmployeeNo));
+                break;
+            case ProfileAction.RemoveFriend:
+                if (MessageBox.Show(owner, $"{user.DisplayName}님을 친구 목록에서 뺄까요?\n대화 내용은 그대로 남습니다.", Theme.AppName,
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    _client.Send(Packet.Create(PacketType.FriendRemove, body: user.EmployeeNo));
+                break;
+            case ProfileAction.ChangePhoto: UploadPhoto(PhotoKind.Profile, owner); break;
+            case ProfileAction.RemovePhoto: RemovePhoto(PhotoKind.Profile, owner); break;
+            case ProfileAction.ChangeBackground: UploadPhoto(PhotoKind.Background, owner); break;
+            case ProfileAction.RemoveBackground: RemovePhoto(PhotoKind.Background, owner); break;
+            case ProfileAction.ChangeStatusMessage: ChangeStatusMessage(); break;
         }
-        System.Drawing.Imaging.ImageCodecInfo jpeg = System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders()
-            .First(c => c.FormatID == System.Drawing.Imaging.ImageFormat.Jpeg.Guid);
-        foreach (long quality in new long[] { 88, 75, 60 })
-        {
-            using var ms = new MemoryStream();
-            using var parameters = new System.Drawing.Imaging.EncoderParameters(1);
-            parameters.Param[0] = new System.Drawing.Imaging.EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
-            bitmap.Save(ms, jpeg, parameters);
-            if (ms.Length <= ProfileRules.MaxPhotoBytes) return ms.ToArray();
-        }
-        return null;
     }
 
     /// <summary>내 휴대폰 번호 등록·변경 (친구가 번호로 나를 찾을 수 있게).</summary>
@@ -2184,6 +2247,7 @@ public sealed class MainForm : Form
     private void ShowUserMenu(UserInfo user, Point location)
     {
         var menu = new ContextMenuStrip();
+        menu.Items.Add("프로필 보기", null, (_, _) => ShowProfile(user));
         menu.Items.Add("1:1 대화", null, (_, _) => OpenDirect(user, activate: true));
         menu.Items.Add(new ToolStripSeparator());
         if (IsFriend(user.EmployeeNo))
@@ -2278,6 +2342,7 @@ public sealed class MainForm : Form
         window.OlderHistoryRequested += RequestOlderHistory;
         window.FileCommandRequested += OnFileCommand;
         window.RoomFilesRequested += OpenRoomFiles;
+        window.ProfileRequested += ShowProfileByNo;
         window.ReactionRequested += (_, item, emoji) =>
             _client.Send(Packet.Create(PacketType.Reaction).WithData(new ReactionRequest { MessageId = item.MessageId, Emoji = emoji }));
         window.DeleteRequested += (w, item) =>

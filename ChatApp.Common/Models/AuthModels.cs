@@ -88,6 +88,9 @@ public sealed class UserInfo
     /// <summary>프로필 사진 버전(바꾼 시각, 0 = 사진 없음). 버전이 바뀌면 화면이 ProfilePhotoReq로 새 사진을 받아 간다.</summary>
     public long PhotoVersion { get; set; }
 
+    /// <summary>프로필 배경 사진 버전(0 = 없음). 프로필 카드를 열 때 버전이 바뀌었으면 새로 받는다.</summary>
+    public long BackgroundVersion { get; set; }
+
     /// <summary>
     /// 상태만 바꾼 복사본. [스레드] 다른 스레드가 같은 UserInfo를 JSON으로 만드는 중에 필드를 고치면 반쯤 바뀐 값이 보일 수 있으므로,
     /// 기존 객체를 고치지 않고 새 객체를 만들어 통째로 바꿔 끼운다(참조 대입은 원자적).
@@ -95,21 +98,28 @@ public sealed class UserInfo
     public UserInfo WithStatus(Presence presence, string statusMessage) => new()
     {
         EmployeeNo = EmployeeNo, Name = Name, Department = Department, Position = Position, Role = Role,
-        Presence = presence, StatusMessage = statusMessage, PhotoVersion = PhotoVersion,
+        Presence = presence, StatusMessage = statusMessage, PhotoVersion = PhotoVersion, BackgroundVersion = BackgroundVersion,
     };
 
     /// <summary>권한만 바꾼 복사본 (관리자 지정·해제가 접속 중인 사람에게 바로 적용되게). 이유는 WithStatus와 같다.</summary>
     public UserInfo WithRole(string role) => new()
     {
         EmployeeNo = EmployeeNo, Name = Name, Department = Department, Position = Position, Role = role,
-        Presence = Presence, StatusMessage = StatusMessage, PhotoVersion = PhotoVersion,
+        Presence = Presence, StatusMessage = StatusMessage, PhotoVersion = PhotoVersion, BackgroundVersion = BackgroundVersion,
     };
 
     /// <summary>프로필 사진 버전만 바꾼 복사본 (이유는 WithStatus와 같다).</summary>
     public UserInfo WithPhoto(long photoVersion) => new()
     {
         EmployeeNo = EmployeeNo, Name = Name, Department = Department, Position = Position, Role = Role,
-        Presence = Presence, StatusMessage = StatusMessage, PhotoVersion = photoVersion,
+        Presence = Presence, StatusMessage = StatusMessage, PhotoVersion = photoVersion, BackgroundVersion = BackgroundVersion,
+    };
+
+    /// <summary>배경 사진 버전만 바꾼 복사본 (이유는 WithStatus와 같다).</summary>
+    public UserInfo WithBackground(long backgroundVersion) => new()
+    {
+        EmployeeNo = EmployeeNo, Name = Name, Department = Department, Position = Position, Role = Role,
+        Presence = Presence, StatusMessage = StatusMessage, PhotoVersion = PhotoVersion, BackgroundVersion = backgroundVersion,
     };
 
     /// <summary>채팅에 표시할 이름. 예: "홍길동 대리"</summary>

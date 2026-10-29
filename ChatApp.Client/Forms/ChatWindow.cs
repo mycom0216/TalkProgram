@@ -156,6 +156,8 @@ internal sealed class ChatWindow : Form
     /// <summary>파일 말풍선 열기/저장/폴더 보기.</summary>
     public event Action<ChatWindow, ChatItem, FileCommand>? FileCommandRequested;
     public event Action<ChatWindow>? RoomFilesRequested;
+    /// <summary>말풍선 옆 프로필 사진을 누름 (사원번호) → 메인 창이 프로필 카드를 연다.</summary>
+    public event Action<string>? ProfileRequested;
 
     // [개념] DPI 대응: 화면 배율(125%, 150% 등)이 커지면 같은 "100픽셀"이 작아 보인다.
     //        LogicalToDeviceUnits는 "100% 기준 픽셀"을 현재 배율의 실제 픽셀로 바꿔 준다. 이름이 길어서 S()로 줄였다.
@@ -218,6 +220,7 @@ internal sealed class ChatWindow : Form
         _view.FileCommandRequested += (item, command) => FileCommandRequested?.Invoke(this, item, command);
         _view.ReplyRequested += BeginReply;
         _view.ThreadRequested += OpenThread;
+        _view.AvatarClicked += no => ProfileRequested?.Invoke(no);
         _view.ReactionRequested += (item, emoji) => ReactionRequested?.Invoke(this, item, emoji);
         _view.DeleteRequested += item => DeleteRequested?.Invoke(this, item);
         _view.EditRequested += item => EditRequested?.Invoke(this, item);

@@ -98,6 +98,9 @@ internal sealed class BubbleChatView : UserControl
     /// <summary>"↳ 댓글 N" 칩 또는 메뉴 → 그 메시지의 댓글 창 열기.</summary>
     public event Action<ChatItem>? ThreadRequested;
 
+    /// <summary>말풍선 옆 프로필 사진을 누름 (사원번호) → 프로필 카드.</summary>
+    public event Action<string>? AvatarClicked;
+
     /// <summary>false면 댓글 칩을 그리지 않는다 (댓글 창 안에서는 이미 그 댓글들을 보고 있으므로).</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public bool ShowThreadChips { get; set; } = true;
@@ -452,6 +455,18 @@ internal sealed class BubbleChatView : UserControl
         return null;
     }
 
+    /// <summary>그 위치의 프로필 사진 (다른 사람 말풍선 옆).</summary>
+    private ChatItem? HitAvatar(Point location)
+    {
+        Point p = ToContent(location);
+        foreach (ChatItem item in _items)
+        {
+            if (item.Y > p.Y) break;
+            if (!item.AvatarRect.IsEmpty && item.AvatarRect.Contains(p) && item.SenderKey.Length > 0) return item;
+        }
+        return null;
+    }
+
     private ChatItem? HitQuote(Point location)
     {
         Point p = ToContent(location);
@@ -462,7 +477,7 @@ internal sealed class BubbleChatView : UserControl
     {
         base.OnMouseMove(e);
         bool hand = HitFile(e.Location) is not null || HitReaction(e.Location) is not null || HitQuote(e.Location) is not null
-                    || HitThread(e.Location) is not null;
+                    || HitThread(e.Location) is not null || HitAvatar(e.Location) is not null;
         Cursor = hand ? Cursors.Hand : Cursors.Default;
     }
 
@@ -470,6 +485,11 @@ internal sealed class BubbleChatView : UserControl
     {
         base.OnMouseClick(e);
         if (e.Button != MouseButtons.Left) return;
+        if (HitAvatar(e.Location) is ChatItem sender)
+        {
+            AvatarClicked?.Invoke(sender.SenderKey);
+            return;
+        }
         if (HitThread(e.Location) is ChatItem threadRoot)
         {
             ThreadRequested?.Invoke(threadRoot);

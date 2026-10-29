@@ -21,5 +21,8 @@ public class ProfileRulesTests
     {
         // 사진은 Base64로 바뀌어 약 4/3배가 된다. 패킷 한도(1MB)를 넘으면 연결이 끊기므로 여유 있게 작아야 한다.
         Assert.True(ProfileRules.MaxPhotoBytes * 4 / 3 + 4096 < ChatApp.Common.Protocol.PacketSerializer.MaxBodySize);
+        Assert.True(ProfileRules.MaxBackgroundBytes * 4 / 3 + 4096 < ChatApp.Common.Protocol.PacketSerializer.MaxBodySize);
+        Assert.Equal(ProfileRules.MaxBackgroundBytes, ProfileRules.MaxBytes(PhotoKind.Background));
+        Assert.Equal(ProfileRules.MaxPhotoBytes, ProfileRules.MaxBytes(PhotoKind.Profile));
     }
 }
