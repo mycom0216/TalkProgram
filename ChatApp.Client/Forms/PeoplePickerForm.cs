@@ -35,6 +35,10 @@ public sealed class PeoplePickerForm : Form
     private List<UserInfo> _all = [];
     private readonly HashSet<string> _checked = [];
     private bool _filling;  // 목록을 다시 채우는 중에는 체크 이벤트를 무시한다
+    // [전체 선택] 체크 상자: 지금 목록에 보이는 사람(찾기로 걸러진 결과)을 한꺼번에 선택·해제한다
+    private readonly CheckBox _selectAll = new() { Text = "전체 선택", Dock = DockStyle.Top, Height = 28, Visible = false };
+    private bool _syncingSelectAll; // 개별 체크에 맞춰 [전체 선택] 표시만 바꾸는 중 (그때는 일괄 선택을 하지 않는다)
+    private int _maxSelect = int.MaxValue; // 한 번에 고를 수 있는 최대 인원 (방 남은 자리)
     private bool _received; // 서버에서 목록을 받았는지 (받기 전의 0명과 진짜 0명을 구분)
     private readonly string? _hint; // 한 명 고르기의 안내 문구 (없으면 1:1 안내)
 
@@ -49,7 +53,8 @@ public sealed class PeoplePickerForm : Form
     /// <param name="hint">아래쪽 안내 문구 (한 명 고르기)</param>
     /// <param name="skipText">세 번째 버튼 글자 (예: "그냥 나가기"). 누르면 아무도 고르지 않고 DialogResult.Ignore로 닫힌다.</param>
     public PeoplePickerForm(ChatClient client, string title, bool multiSelect, IEnumerable<string> exclude,
-                            IEnumerable<UserInfo>? people = null, string? okText = null, string? hint = null, string? skipText = null)
+                            IEnumerable<UserInfo>? people = null, string? okText = null, string? hint = null, string? skipText = null,
+                            int maxSelect = int.MaxValue)
     {
         _client = client;
         _multi = multiSelect;
@@ -70,6 +75,9 @@ public sealed class PeoplePickerForm : Form
         _list.Columns.Add("이름", LogicalToDeviceUnits(140));
         _list.Columns.Add("부서", LogicalToDeviceUnits(130));
         _list.Columns.Add("사원번호", LogicalToDeviceUnits(110));
+        _maxSelect = Math.Max(1, maxSelect);
+        _selectAll.Visible = multiSelect;
+        _selectAll.CheckedChanged += (_, _) => { if (!_syncingSelectAll) SetAllVisible(_selectAll.Checked); };
         _list.ItemChecked += (_, e) =>
         {
             if (_filling || e.Item.Tag is not UserInfo u) return;
@@ -102,6 +110,7 @@ public sealed class PeoplePickerForm : Form
 
         var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(LogicalToDeviceUnits(10)) };
         body.Controls.Add(_list);
+        body.Controls.Add(_selectAll); // 찾기 칸 바로 아래 (Dock Top은 나중에 넣은 것이 더 위)
         body.Controls.Add(_filter);
         body.Controls.Add(_status);
         body.Controls.Add(buttons);
@@ -165,6 +174,22 @@ public sealed class PeoplePickerForm : Form
         UpdateStatus();
     }
 
+    /// <summary>지금 목록에 보이는 사람을 모두 선택하거나 모두 해제한다 (찾기로 걸러져 안 보이는 사람의 선택은 그대로).</summary>
+    private void SetAllVisible(bool check)
+    {
+        _filling = true; // 줄마다 ItemChecked가 오지 않게 하고, 끝나고 한 번만 상태를 갱신한다
+        _list.BeginUpdate();
+        foreach (ListViewItem item in _list.Items)
+        {
+            if (item.Tag is not UserInfo u) continue;
+            item.Checked = check;
+            if (check) _checked.Add(u.EmployeeNo); else _checked.Remove(u.EmployeeNo);
+        }
+        _list.EndUpdate();
+        _filling = false;
+        UpdateStatus();
+    }
+
     private void UpdateStatus()
     {
         if (_multi)
@@ -176,8 +201,16 @@ public sealed class PeoplePickerForm : Form
                 return;
             }
             _status.Text = $"{_list.Items.Count}명 표시 · {_checked.Count}명 선택" +
-                           (_checked.Count > RoomInviteRequest.MaxPerRequest ? $" (한 번에 최대 {RoomInviteRequest.MaxPerRequest}명)" : "");
-            _ok.Enabled = _checked.Count is > 0 and <= RoomInviteRequest.MaxPerRequest;
+                           (_checked.Count > _maxSelect ? $" (방에 남은 자리는 {_maxSelect}명입니다)" : "");
+            _ok.Enabled = _checked.Count > 0 && _checked.Count <= _maxSelect;
+
+            // [전체 선택] 표시를 지금 상태에 맞춘다: 보이는 사람이 모두 선택됐을 때만 체크
+            bool allVisible = _list.Items.Count > 0 && _list.Items.Cast<ListViewItem>().All(i => i.Checked);
+            _syncingSelectAll = true;
+            _selectAll.Checked = allVisible;
+            _syncingSelectAll = false;
+            _selectAll.Enabled = _list.Items.Count > 0;
+            _selectAll.Text = string.IsNullOrWhiteSpace(_filter.Text) ? $"전체 선택 ({_list.Items.Count}명)" : $"찾은 사람 전체 선택 ({_list.Items.Count}명)";
         }
         else
         {

@@ -1038,7 +1038,9 @@ public sealed class MainForm : Form
         if (form.IsPrivate)
         {
             // 비공개 방은 목록에 안 보이므로 함께할 사람을 바로 고르게 한다 (건너뛰어도 나중에 [초대]로 부를 수 있다)
-            using var picker = new PeoplePickerForm(_client, $"'{form.RoomName}' 방에 초대할 사람 (건너뛰려면 취소)", multiSelect: true, [_me.EmployeeNo]);
+            // 만들면서 초대는 한 번에 최대 50명(서버 제한)이고, 나를 뺀 방 인원까지만 고를 수 있다. 더 부르려면 방에서 [초대]
+            using var picker = new PeoplePickerForm(_client, $"'{form.RoomName}' 방에 초대할 사람 (건너뛰려면 취소)", multiSelect: true, [_me.EmployeeNo],
+                                                    maxSelect: Math.Min(RoomInviteRequest.MaxPerRequest, Math.Max(1, form.MaxUsers - 1)));
             if (picker.ShowDialog(this) == DialogResult.OK)
                 request.InviteNos = picker.Selected.Select(u => u.EmployeeNo).Take(Math.Max(0, form.MaxUsers - 1)).ToList();
         }
@@ -1127,13 +1129,24 @@ public sealed class MainForm : Form
     {
         if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? room)) return;
         var members = room.Members?.Select(m => m.EmployeeNo) ?? [];
-        using var picker = new PeoplePickerForm(_client, $"'{room.Name}' 방에 초대", multiSelect: true, members.Append(_me.EmployeeNo));
-        if (picker.ShowDialog(owner) != DialogResult.OK) return;
-        _client.Send(Packet.Create(PacketType.RoomInvite).WithData(new RoomInviteRequest
+        int roomLeft = room.MaxUsers > 0 ? Math.Max(0, room.MaxUsers - room.MemberCount) : int.MaxValue;
+        if (roomLeft == 0)
         {
-            RoomId = roomId,
-            EmployeeNos = picker.Selected.Select(u => u.EmployeeNo).ToList(),
-        }));
+            MessageBox.Show(owner, $"방이 가득 찼습니다 (최대 {room.MaxUsers}명).", "초대", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        using var picker = new PeoplePickerForm(_client, $"'{room.Name}' 방에 초대", multiSelect: true, members.Append(_me.EmployeeNo),
+                                                maxSelect: roomLeft);
+        if (picker.ShowDialog(owner) != DialogResult.OK) return;
+        // 서버는 요청 하나에 최대 50명까지 받는다 → [전체 선택]으로 많이 골랐으면 50명씩 나눠 보낸다
+        foreach (string[] chunk in picker.Selected.Select(u => u.EmployeeNo).Chunk(RoomInviteRequest.MaxPerRequest))
+        {
+            _client.Send(Packet.Create(PacketType.RoomInvite).WithData(new RoomInviteRequest
+            {
+                RoomId = roomId,
+                EmployeeNos = chunk.ToList(),
+            }));
+        }
         // 결과: 초대된 사람에게 RoomRes, 방 사람들에게 SystemMsg("…님을 초대했습니다") + RoomUpdate
     }
 
