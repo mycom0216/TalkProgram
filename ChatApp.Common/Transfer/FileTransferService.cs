@@ -11,6 +11,7 @@ namespace ChatApp.Common.Transfer;
 /// - 올리기: 파일마다 작업 스레드(Upload-xxxx)가 256KB씩 읽어 보낸다. 조각 사이사이에 채팅 패킷도 나가므로 채팅이 멈추지 않는다.
 ///           동시에 3개씩 보내고 나머지는 세마포어에서 차례를 기다렸다가 자동으로 이어서 보낸다(개수 제한 없음, 실패하지 않음).
 /// - 내려받기: 조각은 수신 스레드에서 TryHandle로 받아 바로 파일에 쓴다(화면 스레드로 넘기지 않아 UI가 느려지지 않음).
+///             동시에 3개까지 받고, 나머지는 대기열에서 기다렸다가 앞 파일이 끝나면 자동으로 이어서 받는다(실패하지 않음).
 /// - 이벤트는 작업 스레드 또는 수신 스레드에서 발생한다. 화면을 바꾸려면 BeginInvoke로 넘길 것.
 ///   진행률 이벤트는 1% 바뀔 때만 발생한다(초당 수천 번 화면을 다시 그리지 않도록).
 /// </summary>
@@ -34,7 +35,9 @@ public sealed class FileTransferService
         // 요청마다 새로 만드는 짧은 ID. 서버가 이 요청의 패킷(시작·조각·끝)에 그대로 붙여 보낸다.
         // [왜] 받기를 취소하고 바로 같은 파일을 다시 받으면, 앞 요청의 조각이 늦게 도착할 수 있다.
         //      파일 ID만으로는 둘을 구분할 수 없어서 새 파일에 옛 조각이 섞여 파일이 깨진다 → 요청 ID로 걸러낸다.
-        public string RequestId { get; } = Guid.NewGuid().ToString("N")[..8];
+        public string RequestId { get; set; } = Guid.NewGuid().ToString("N")[..8];
+        public bool Requested; // 서버에 요청을 보냈는지 (false = 차례를 기다리는 중)
+        public int RetryCount; // 서버가 "꽉 참"으로 거절해 다시 요청한 횟수
         public FileStream? Stream;
         public long Size;
         public long Received;
@@ -49,6 +52,8 @@ public sealed class FileTransferService
     private readonly SemaphoreSlim _uploadSlots = new(FileRules.MaxActiveTransfers);
     private readonly object _downloadLock = new();
     private readonly Dictionary<string, DownloadJob> _downloads = [];
+    // 차례를 기다리는 내려받기 (서버는 1인당 동시에 3개까지만 보내 준다 → 넘치는 것은 여기서 기다렸다가 자동으로 시작)
+    private readonly LinkedList<string> _downloadQueue = new();
 
     /// <param name="send">패킷 전송 함수(스레드 안전해야 함). 연결이 끊겼으면 false를 돌려줘야 한다.</param>
     /// <param name="sendBulk">
@@ -68,6 +73,14 @@ public sealed class FileTransferService
     public event Action<string>? UploadSent;               // 다 보냄 → 곧 FileMsg가 온다
     public event Action<string, string>? UploadFailed;     // (파일 ID, 이유)
     public event Action<string, int>? DownloadProgress;
+    /// <summary>대기열에서 차례가 와서 서버에 요청을 보냄 (파일 ID). 화면은 "대기 중" → "받는 중 0%"로 바꾼다.</summary>
+    public event Action<string>? DownloadStarted;
+
+    /// <summary>받기를 눌렀지만 아직 차례를 기다리는 중인지 (동시에 3개를 받는 중이라).</summary>
+    public bool IsDownloadQueued(string fileId)
+    {
+        lock (_downloadLock) return _downloads.TryGetValue(fileId, out DownloadJob? job) && !job.Requested;
+    }
     public event Action<string, string>? DownloadCompleted; // (파일 ID, 저장 경로)
     public event Action<string, string>? DownloadFailed;
 
@@ -213,19 +226,59 @@ public sealed class FileTransferService
     /// <summary>내려받기 요청. 같은 파일을 이미 받는 중이면 false.</summary>
     public bool StartDownload(string fileId, string destination)
     {
-        DownloadJob job;
         lock (_downloadLock)
         {
             if (_downloads.ContainsKey(fileId)) return false;
-            job = new DownloadJob(fileId, destination);
-            _downloads[fileId] = job;
+            _downloads[fileId] = new DownloadJob(fileId, destination);
+            _downloadQueue.AddLast(fileId); // 일단 줄을 세우고, 자리가 있으면 바로 시작
         }
+        PumpDownloads();
+        return true;
+    }
 
-        if (!_send(Packet.Create(PacketType.FileDownloadReq, body: job.RequestId, target: fileId)))
+    /// <summary>
+    /// 내려받기 대기열: 동시에 받는 수가 한도(3개)보다 적으면 기다리던 것을 서버에 요청한다.
+    /// [왜] 예전에는 4번째를 바로 요청해서 서버가 "동시에 3개까지"로 거절했다. 이제는 자리가 날 때까지 기다렸다가 자동으로 받는다.
+    /// 받기가 끝나거나 취소·실패할 때마다 불린다.
+    /// </summary>
+    private void PumpDownloads()
+    {
+        while (true)
         {
-            FinishDownload(fileId, "서버와 연결이 끊어졌습니다.");
-            return false;
+            DownloadJob? next = null;
+            lock (_downloadLock)
+            {
+                int active = _downloads.Values.Count(j => j.Requested);
+                if (active >= FileRules.MaxActiveTransfers || _downloadQueue.First is null) return;
+                string id = _downloadQueue.First.Value;
+                _downloadQueue.RemoveFirst();
+                if (_downloads.TryGetValue(id, out next)) next.Requested = true;
+            }
+            if (next is null) continue; // 기다리는 사이 취소됨
+            if (!_send(Packet.Create(PacketType.FileDownloadReq, body: next.RequestId, target: next.FileId)))
+            {
+                FinishDownload(next.FileId, "서버와 연결이 끊어졌습니다.");
+                return;
+            }
+            DownloadStarted?.Invoke(next.FileId);
         }
+    }
+
+    /// <summary>
+    /// 서버가 "지금은 꽉 찼다"며 거절함 → 실패로 끝내지 않고 대기열 맨 앞에 다시 세워 잠시 뒤 다시 요청한다.
+    /// [왜] 서버는 앞 파일을 다 보낸 "직후"에 자리를 비우는데, 그 사이에 다음 요청이 먼저 도착할 수 있다(아주 짧은 경쟁).
+    /// </summary>
+    private bool RetryLater(string fileId)
+    {
+        lock (_downloadLock)
+        {
+            if (!_downloads.TryGetValue(fileId, out DownloadJob? job) || job.RetryCount >= 20) return false;
+            job.RetryCount++;
+            job.Requested = false;
+            job.RequestId = Guid.NewGuid().ToString("N")[..8]; // 새 요청으로 (옛 요청의 늦은 패킷은 버려진다)
+            _downloadQueue.AddFirst(fileId);
+        }
+        _ = Task.Delay(500).ContinueWith(_ => PumpDownloads(), TaskScheduler.Default);
         return true;
     }
 
@@ -262,7 +315,12 @@ public sealed class FileTransferService
                 return false; // 대화에 표시해야 하므로 화면으로 넘긴다
 
             case PacketType.FileDownloadRes:
-                if (!packet.Success) FinishDownload(fileId, packet.Body ?? "파일을 받지 못했습니다.");
+                if (!packet.Success)
+                {
+                    // "동시에 N개까지" = 잠깐 꽉 찬 것뿐 → 실패로 끝내지 않고 잠시 뒤 다시 요청
+                    if (packet.Body?.Contains("동시에") == true && RetryLater(fileId)) return true;
+                    FinishDownload(fileId, packet.Body ?? "파일을 받지 못했습니다.");
+                }
                 else BeginDownload(fileId, packet.Body, packet.GetData<SharedFile>()?.Size ?? 0);
                 return true;
 
@@ -338,7 +396,9 @@ public sealed class FileTransferService
         {
             if (!_downloads.Remove(fileId, out job)) return;
             job.Stream?.Dispose();
+            _downloadQueue.Remove(fileId);
         }
+        PumpDownloads(); // 자리가 났으니 기다리던 다음 파일을 시작
 
         if (error is null)
         {
@@ -407,9 +467,12 @@ public sealed class FileTransferService
         {
             if (!_downloads.Remove(fileId, out job)) return false;
             job.Stream?.Dispose();
+            _downloadQueue.Remove(fileId);
         }
         try { File.Delete(job.TempPath); } catch (IOException) { }
-        _send(Packet.Create(PacketType.FileDownloadCancel, target: fileId));
+        // 아직 차례를 기다리던 것이면 서버는 모르는 요청이라 취소를 보낼 필요가 없다
+        if (job.Requested) _send(Packet.Create(PacketType.FileDownloadCancel, target: fileId));
+        PumpDownloads();
         return true;
     }
 
@@ -424,7 +487,11 @@ public sealed class FileTransferService
             Fail(job, job.AllSent ? $"{reason} (서버에 저장됐는지 확인하지 못했습니다. 다시 접속한 뒤 대화 기록에서 확인하세요)" : reason);
         }
         List<string> ids;
-        lock (_downloadLock) ids = _downloads.Keys.ToList();
+        lock (_downloadLock)
+        {
+            ids = _downloads.Keys.ToList();
+            _downloadQueue.Clear(); // 끊겼으니 기다리던 것도 새로 요청하지 않는다
+        }
         foreach (string id in ids) FinishDownload(id, reason);
     }
 }

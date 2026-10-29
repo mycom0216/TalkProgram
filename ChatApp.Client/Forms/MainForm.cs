@@ -119,6 +119,8 @@ public sealed class MainForm : Form
         _userList.ItemActivated += item => { if (item.Tag is UserInfo user) OpenDirect(user, activate: true); };
         _roomList.ItemActivated += item => { if (item.Tag is RoomInfo room) EnterRoom(room); };
         _roomList.ItemContextRequested += (item, location) => { if (item.Tag is RoomInfo room) ShowRoomListMenu(room, location); };
+        _usersTab.Name = "UsersTab"; // 화면 자동 테스트(UI Automation)가 찾는 이름
+        _roomsTab.Name = "RoomsTab";
         _usersTab.Click += (_, _) => ShowTab(rooms: false);
         _roomsTab.Click += (_, _) => ShowTab(rooms: true);
         _createRoomButton.Click += (_, _) => CreateRoom();
@@ -174,6 +176,7 @@ public sealed class MainForm : Form
         _roomList.Dock = DockStyle.Fill;
         _roomList.EmptyText = "채팅방이 없습니다.";
         _createRoomButton.Text = "+  새 채팅방 만들기";
+        _createRoomButton.Name = "CreateRoomButton"; // 화면 자동 테스트(UI Automation)가 찾는 이름
         _createRoomButton.Dock = DockStyle.Bottom;
         _createRoomButton.Height = S(42);
         _createRoomButton.FlatStyle = FlatStyle.Flat;
@@ -1335,6 +1338,13 @@ public sealed class MainForm : Form
             f.State = FileState.Downloading;
             f.Percent = percent;
         });
+        // 대기열에서 차례가 옴 → "대기 중"을 "받는 중 0%"로
+        _transfers.DownloadStarted += id => UpdateFile(id, f =>
+        {
+            if (f.State != FileState.Queued || !_transfers.IsDownloading(id)) return;
+            f.State = FileState.Downloading;
+            f.Percent = 0;
+        });
         _transfers.DownloadCompleted += (id, path) => UiHelper.RunOnUi(this, () => OnDownloadCompleted(id, path));
         _transfers.DownloadFailed += (id, reason) => UiHelper.RunOnUi(this, () =>
         {
@@ -1481,7 +1491,7 @@ public sealed class MainForm : Form
                 // 보내는 중·받는 중에 누르면 취소할지 묻는다 (실수로 누를 수 있으니 확인)
                 if (file.CanCancel)
                 {
-                    string what = file.State == FileState.Uploading ? "보내기" : "받기";
+                    string what = file.State == FileState.Uploading ? "보내기" : file.State == FileState.Queued ? "받기 대기" : "받기";
                     if (MessageBox.Show(window, $"'{file.Info.FileName}' {what}를 취소할까요?", "전송 취소",
                             MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                         CancelTransfer(window, item);
@@ -1581,7 +1591,7 @@ public sealed class MainForm : Form
         {
             file.State = FileState.Canceled;
         }
-        else if (file.State == FileState.Downloading && _transfers.CancelDownload(file.Info.FileId))
+        else if (file.State is FileState.Downloading or FileState.Queued && _transfers.CancelDownload(file.Info.FileId))
         {
             file.State = FileState.Ready;
             file.Percent = 0;
@@ -1596,7 +1606,8 @@ public sealed class MainForm : Form
         if (!_connected) return;
         if (!_transfers.StartDownload(file.Info.FileId, destination)) return; // 이미 받는 중
         file.OpenWhenDownloaded = openWhenDone;
-        file.State = FileState.Downloading;
+        // 동시에 3개를 받는 중이면 차례를 기다린다 → "대기 중"으로 구분해 보여 준다
+        file.State = _transfers.IsDownloadQueued(file.Info.FileId) ? FileState.Queued : FileState.Downloading;
         file.Percent = 0;
         window.Conversation.NotifyChanged(item);
     }
@@ -1660,7 +1671,7 @@ public sealed class MainForm : Form
         }
         if (!_connected || file.IsBusy || file.State == FileState.Failed) return;
         if (!_transfers.StartDownload(file.Info.FileId, cache)) return;
-        file.State = FileState.Downloading;
+        file.State = _transfers.IsDownloadQueued(file.Info.FileId) ? FileState.Queued : FileState.Downloading;
         file.Percent = 0;
         conversation.NotifyChanged(item);
     }

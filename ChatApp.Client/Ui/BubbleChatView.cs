@@ -218,7 +218,20 @@ internal sealed class BubbleChatView : UserControl
             AutoScrollPosition = new Point(0, Math.Max(0, anchor.Y - anchorOffset));
         else
             ScrollToBottom();
+        UpdateAccessibleName();
         Invalidate();
+    }
+
+    /// <summary>
+    /// 화면 낭독기·화면 자동 테스트용 이름: "대화 N개 · 마지막: 보낸 사람: 내용".
+    /// [왜] 말풍선은 직접 그려서(컨트롤이 아님) UI Automation이 내용을 볼 수 없다. 마지막 메시지를 이름으로 알려 준다.
+    /// </summary>
+    private void UpdateAccessibleName()
+    {
+        ChatItem? last = _items.LastOrDefault(i => !i.IsSystemLike);
+        AccessibleName = last is null
+            ? $"대화 {_items.Count}개"
+            : $"대화 {_items.Count}개 · 마지막: {(last.Kind == ChatItemKind.Mine ? "나" : last.Sender)}: {last.DisplayText}";
     }
 
     public void AddItem(ChatItem item)
@@ -235,6 +248,7 @@ internal sealed class BubbleChatView : UserControl
 
         // 아래를 보고 있었거나 내가 보낸 메시지면 맨 아래로 (위 대화를 읽는 중이면 그대로 둔다)
         if (wasAtBottom || item.Kind == ChatItemKind.Mine) ScrollToBottom();
+        UpdateAccessibleName();
         Invalidate();
     }
 
@@ -764,6 +778,7 @@ internal sealed class BubbleChatView : UserControl
         FileState.Uploading => $"보내는 중 {file.Percent}% · 클릭하면 취소",
         FileState.Processing => "서버에 저장하는 중...",
         FileState.Downloading => $"받는 중 {file.Percent}% · 클릭하면 취소",
+        FileState.Queued => "대기 중 · 앞 파일을 받은 뒤 자동으로 받습니다 (클릭하면 취소)",
         FileState.Failed => $"실패: {file.Error}",
         FileState.Canceled => "보내기를 취소했습니다",
         _ => file.HasLocalFile ? $"{file.Info.SizeText} · 클릭해서 열기" : $"{file.Info.SizeText} · 클릭해서 받기",

@@ -21,6 +21,7 @@ internal enum FileState
     Processing,   // 다 보냈고 서버가 저장하는 중
     Ready,        // 대화에 올라감 (받을 수 있음)
     Downloading,  // 받는 중 (Percent)
+    Queued,       // 받기를 눌렀지만 차례를 기다리는 중 (동시에 3개까지만 받으므로)
     Failed,       // 보내기 실패 (Error)
     Canceled,     // 내가 보내기를 취소함
 }
@@ -71,8 +72,8 @@ internal sealed class ChatFile
 
     // [개념] is A or B or C : C# 패턴 매칭. State == A || State == B || State == C 와 같다.
     // 전송 중에는 같은 파일을 또 열기/저장하지 못하게 막는 데 쓴다.
-    public bool IsBusy => State is FileState.Uploading or FileState.Processing or FileState.Downloading;
+    public bool IsBusy => State is FileState.Uploading or FileState.Processing or FileState.Downloading or FileState.Queued;
 
     /// <summary>지금 취소할 수 있는지. "서버에 저장하는 중"(Processing)은 이미 다 보낸 뒤라 취소하지 않는다.</summary>
-    public bool CanCancel => State is FileState.Uploading or FileState.Downloading;
+    public bool CanCancel => State is FileState.Uploading or FileState.Downloading or FileState.Queued;
 }
