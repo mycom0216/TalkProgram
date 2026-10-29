@@ -29,6 +29,7 @@ internal sealed class RoomFilesForm : Form
         _files.Columns.Add("종류", 90);
         _files.Columns.Add("보낸 사람", 110);
         _files.Columns.Add("날짜", 150);
+        _files.Columns.Add("용량", 90, HorizontalAlignment.Right); // 숫자는 오른쪽 맞춤이 비교하기 쉽다
         AddItems(items);
         _files.DoubleClick += (_, _) => { if (_files.SelectedIndices.Count > 0) OpenRequested?.Invoke(_items[_files.SelectedIndices[0]]); };
         _files.MouseUp += (_, e) =>
@@ -69,7 +70,7 @@ internal sealed class RoomFilesForm : Form
         AddItems(additions);
         _loadMore.Enabled = error is not null || hasMore;
         _loadMore.Text = error is not null ? "다시 시도" : hasMore ? "이전 파일 더 불러오기" : "모든 파일을 불러왔습니다";
-        _status.Text = error ?? $"파일 {_items.Count}개";
+        _status.Text = error ?? $"파일 {_items.Count}개 · 합계 {FileRules.FormatSize(_items.Sum(x => x.File?.Info.Size ?? 0))}";
     }
 
     private void AddItems(IEnumerable<ChatItem> items)
@@ -78,10 +79,17 @@ internal sealed class RoomFilesForm : Form
         {
             if (!_fileIds.Add(item.File!.Info.FileId)) continue;
             _items.Add(item);
-            _files.Items.Add(new ListViewItem([item.File.Info.FileName, item.File.Info.Kind.ToString(), item.Sender,
-                item.Time.ToLocalTime().ToString("yyyy-MM-dd HH:mm")]));
+            _files.Items.Add(new ListViewItem([item.File.Info.FileName, KindText(item.File.Info.Kind), item.Sender,
+                item.Time.ToLocalTime().ToString("yyyy-MM-dd HH:mm"), FileRules.FormatSize(item.File.Info.Size)]));
         }
     }
+
+    private static string KindText(FileKind kind) => kind switch
+    {
+        FileKind.Image => "사진",
+        FileKind.Video => "동영상",
+        _ => "파일",
+    };
 
     private DateTime? OldestTime() => _items.Where(x => x.File is not null).Select(x => (DateTime?)x.Time).Min();
     private string? OldestFileId() => _items.Where(x => x.File is not null).OrderBy(x => x.Time).FirstOrDefault()?.File?.Info.FileId;
