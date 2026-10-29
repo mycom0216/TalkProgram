@@ -125,8 +125,7 @@ public sealed class AdminForm : Form
     }
 
     /// <summary>서버 시각(UTC)을 내 PC 시간으로. JSON에서 Kind가 빠져 와도 UTC로 본다.</summary>
-    private static DateTime ToLocal(DateTime time) =>
-        time.Kind == DateTimeKind.Local ? time : DateTime.SpecifyKind(time, DateTimeKind.Utc).ToLocalTime();
+    private static DateTime ToLocal(DateTime time) => AdminStatsView.ToLocal(time, TimeZoneInfo.Local);
 
     /// <summary>받은 통계를 카드·그래프로 그린다. 시간별(UTC) 자료를 내 PC 시간대 기준 날짜·시간으로 묶는다.</summary>
     private void ShowStats(AdminStats s)
@@ -136,26 +135,17 @@ public sealed class AdminForm : Form
 
         // 최근 7일 메시지 (날짜별)
         string[] dayLabels = new string[7];
-        int[] dayValues = new int[7];
         for (int i = 0; i < 7; i++)
         {
             DateTime day = firstDay.AddDays(i);
             dayLabels[i] = i == 6 ? "오늘" : $"{day:M/d}({"일월화수목금토"[(int)day.DayOfWeek]})";
         }
-        foreach (HourCount h in s.MessageHours)
-        {
-            int index = (ToLocal(h.HourUtc).Date - firstDay).Days;
-            if (index is >= 0 and < 7) dayValues[index] += h.Count;
-        }
+        // 시간대 계산은 Common의 AdminStatsView에 있다 (단위 테스트 StatsViewTests로 자정 경계까지 확인)
+        int[] dayValues = AdminStatsView.Daily(s.MessageHours, today, TimeZoneInfo.Local);
 
         // 시간대별 로그인 (7일 동안 그 시간에 로그인한 사람 수의 합)
         string[] hourLabels = Enumerable.Range(0, 24).Select(h => $"{h}시").ToArray();
-        int[] hourValues = new int[24];
-        foreach (HourCount h in s.LoginHours)
-        {
-            DateTime local = ToLocal(h.HourUtc);
-            if (local.Date >= firstDay) hourValues[local.Hour] += h.Count;
-        }
+        int[] hourValues = AdminStatsView.HourOfDay(s.LoginHours, today, TimeZoneInfo.Local);
 
         _statsTime.Text = $"기준 시각 {ToLocal(s.CapturedAtUtc):yyyy-MM-dd HH:mm:ss} (내 PC 시간)";
         _dailyChart.SetData("최근 7일 메시지", dayLabels, dayValues, highlight: 6, emptyText: "최근 7일 동안 메시지가 없습니다.");
