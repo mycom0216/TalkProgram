@@ -1,4 +1,4 @@
-# 푸시·PR마다 GitHub 서버(Windows)에서 솔루션 전체를 빌드해서 "빌드가 깨지지 않았는지" 확인한다(CI).
+# 푸시·PR마다 GitHub 서버(Windows)에서 솔루션 전체를 빌드하고 단위·통합 테스트를 돌려 "깨지지 않았는지" 확인한다(CI).
 # - WinForms 클라이언트는 Windows 전용(net10.0-windows)이라 windows-latest에서 돌린다.
 # - 이전 파일은 GitHub의 MSIX 패키징 템플릿을 그대로 둔 것이라(솔루션 이름 자리표시자, .NET 8, 서명 인증서 필요) 항상 실패했다.
 name: Build
@@ -31,3 +31,15 @@ jobs:
 
       - name: Build
         run: dotnet build ChatApp.slnx --configuration ${{ matrix.configuration }} --no-restore
+
+      # 단위·통합 테스트 (DB 없이 도는 ChatApp.Tests만). 화면 자동 테스트(ChatApp.UiTests)는 서버와 화면이 필요해 여기서 돌리지 않는다.
+      - name: Test
+        run: dotnet test ChatApp.Tests/ChatApp.Tests.csproj --configuration ${{ matrix.configuration }} --no-build --verbosity normal --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+
+      # 실패했을 때 어떤 테스트가 깨졌는지 내려받아 볼 수 있게 결과 파일을 남긴다
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.configuration }}
+          path: TestResults/*.trx
