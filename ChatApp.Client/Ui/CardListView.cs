@@ -70,6 +70,9 @@ internal sealed class CardListView : UserControl
     public event Action<CardItem>? ItemActivated;
     public event Action? SelectionChanged;
 
+    /// <summary>줄을 오른쪽 클릭함 (그 줄, 목록 안의 마우스 위치). 메뉴는 MainForm이 띄운다.</summary>
+    public event Action<CardItem, Point>? ItemContextRequested;
+
     public CardItem? SelectedItem => _visible.FirstOrDefault(i => !i.IsHeader && i.Key == _selectedKey);
 
     // [개념] DPI(화면 배율) 대응: LogicalToDeviceUnits(30)은 "100% 배율 기준 30픽셀"을 지금 모니터 배율에 맞게 바꾼다.
@@ -190,6 +193,15 @@ internal sealed class CardListView : UserControl
         _selectedKey = item.Key;
         Invalidate();
         SelectionChanged?.Invoke();
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (e.Button != MouseButtons.Right) return;
+        // OnMouseDown에서 이미 그 줄을 선택해 두었다 → 오른쪽 클릭한 줄에 대한 메뉴를 띄우게 알린다
+        int index = IndexAt(e.Y);
+        if (index >= 0 && !_visible[index].IsHeader) ItemContextRequested?.Invoke(_visible[index], e.Location);
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)

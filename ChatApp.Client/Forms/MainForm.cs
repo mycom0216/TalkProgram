@@ -118,6 +118,7 @@ public sealed class MainForm : Form
 
         _userList.ItemActivated += item => { if (item.Tag is UserInfo user) OpenDirect(user, activate: true); };
         _roomList.ItemActivated += item => { if (item.Tag is RoomInfo room) EnterRoom(room); };
+        _roomList.ItemContextRequested += (item, location) => { if (item.Tag is RoomInfo room) ShowRoomListMenu(room, location); };
         _usersTab.Click += (_, _) => ShowTab(rooms: false);
         _roomsTab.Click += (_, _) => ShowTab(rooms: true);
         _createRoomButton.Click += (_, _) => CreateRoom();
@@ -953,6 +954,69 @@ public sealed class MainForm : Form
     }
 
     /// <summary>방 목록에서 더블클릭: 참여 중이면 창만 열고, 아니면 서버에 입장 요청.</summary>
+    /// <summary>방 목록에서 오른쪽 클릭: 열기 / 들어가기, 나가기, 방 삭제(방장·관리자).</summary>
+    private void ShowRoomListMenu(RoomInfo room, Point location)
+    {
+        bool joined = _joinedRooms.ContainsKey(room.RoomId);
+        RoomInfo current = _joinedRooms.GetValueOrDefault(room.RoomId) ?? room;
+        bool canDelete = !room.IsLobby && (current.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
+
+        var menu = new ContextMenuStrip();
+        menu.Items.Add(joined ? "열기" : "들어가기", null, (_, _) => EnterRoom(room));
+        if (!room.IsLobby && joined)
+        {
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("방 나가기", null, (_, _) => ConfirmLeaveRoom(room.RoomId, this)).Enabled = _connected;
+        }
+        if (canDelete)
+        {
+            if (!joined) menu.Items.Add(new ToolStripSeparator());
+            ToolStripItem delete = menu.Items.Add("방 삭제", null, (_, _) => ConfirmDeleteRoom(room.RoomId, this));
+            delete.ForeColor = Theme.Danger;
+            delete.Enabled = _connected;
+        }
+        // [주의] 메뉴는 닫힐 때 바로 해제한다(그때그때 만드는 메뉴라 남겨 두면 창 핸들이 쌓인다).
+        //        Closed 직후에는 아직 클릭 처리가 끝나지 않았을 수 있어, 한 박자 뒤(BeginInvoke)에 해제한다.
+        menu.Closed += (_, _) => BeginInvoke(new Action(menu.Dispose));
+        menu.Show(_roomList, location);
+    }
+
+    /// <summary>방 나가기 확인. 방장이면 먼저 방장을 넘길 사람을 고른다. 창 [나가기]·방 메뉴·방 목록 메뉴가 함께 쓴다.</summary>
+    private void ConfirmLeaveRoom(int roomId, IWin32Window owner)
+    {
+        if (!_joinedRooms.TryGetValue(roomId, out RoomInfo? current) || current.IsLobby) return;
+        // 방장이 나가려면 먼저 방장을 넘길 사람을 고른다 (고르지 않으면 서버가 가장 오래된 멤버에게 자동으로 넘긴다)
+        if (current.OwnerNo == _me.EmployeeNo && (current.Members?.Count ?? 0) > 1)
+        {
+            string? next = PickNewOwner(current, owner, "나가기 전에 방장을 넘길 사람을 고르세요",
+                                        skipText: "그냥 나가기 (자동으로 넘기기)");
+            if (next is null) return; // 취소 = 나가지 않음
+            // "그냥 나가기"("")면 넘기지 않고 나간다 → 서버가 가장 먼저 들어온 멤버를 새 방장으로 정하고 방에 알린다
+            if (next.Length > 0)
+                _client.Send(Packet.Create(PacketType.RoomTransferOwner, body: next, target: roomId.ToString()));
+            _client.Send(Packet.Create(PacketType.RoomLeave, target: roomId.ToString())); // 같은 연결이라 순서대로 처리된다
+            return;
+        }
+        string note = "\n다른 멤버가 남아 있으면 방은 그대로 남습니다. (방을 없애려면 방장이 [방 삭제])";
+        if (current.IsPrivate) note += "\n비공개 방이라 다시 들어오려면 멤버의 초대가 필요합니다.";
+        if (MessageBox.Show(owner, $"'{current.Name}' 방에서 나갈까요?{note}", "채팅방 나가기",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            _client.Send(Packet.Create(PacketType.RoomLeave, target: roomId.ToString()));
+        // 창은 서버가 RoomLeft로 확인해 주면 닫힌다
+    }
+
+    /// <summary>방 삭제 확인 (방장·관리자). 참여하지 않은 방도 관리자는 목록에서 바로 지울 수 있다.</summary>
+    private void ConfirmDeleteRoom(int roomId, IWin32Window owner)
+    {
+        RoomInfo? current = _joinedRooms.GetValueOrDefault(roomId) ?? _rooms.FirstOrDefault(r => r.RoomId == roomId);
+        if (current is null || current.IsLobby) return;
+        if (MessageBox.Show(owner,
+                $"'{current.Name}' 방을 삭제할까요?\n\n멤버 {current.MemberCount}명 모두가 방에서 빠지고, 방 목록에서 사라집니다.\n(대화 기록은 서버에 남습니다. 되돌릴 수 없습니다)",
+                "방 삭제", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+            _client.Send(Packet.Create(PacketType.RoomDelete, target: roomId.ToString()));
+        // 결과: 접속 중인 멤버 모두에게 RoomLeft → 창이 닫히고 목록에서 빠진다 (서버가 방 목록도 새로 보낸다)
+    }
+
     private void EnterRoom(RoomInfo room)
     {
         if (_joinedRooms.TryGetValue(room.RoomId, out RoomInfo? joined))
@@ -1009,9 +1073,16 @@ public sealed class MainForm : Form
             if (next is not null)
                 _client.Send(Packet.Create(PacketType.RoomTransferOwner, body: next, target: roomId.ToString()));
         });
+        menu.Items.Add(new ToolStripSeparator());
+        var leave = menu.Items.Add("방 나가기", null, (_, _) => ConfirmLeaveRoom(roomId, window));
+        var delete = menu.Items.Add("방 삭제", null, (_, _) => ConfirmDeleteRoom(roomId, window));
+        delete.ForeColor = Theme.Danger;
         menu.Opening += (_, _) =>
         {
             RoomInfo? room = _joinedRooms.GetValueOrDefault(roomId);
+            leave.Enabled = room is not null && _connected;
+            delete.Visible = room is not null && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
+            delete.Enabled = _connected;
             notice.Enabled = room is not null && _connected && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
             transfer.Enabled = room is not null && _connected && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin) && (room.Members?.Count ?? 0) > 1;
         };
@@ -1088,37 +1159,8 @@ public sealed class MainForm : Form
         window.InviteRequested += _ => InviteToRoom(roomId, window);
         window.ShowDeleteButton = !room.IsLobby && (room.OwnerNo == _me.EmployeeNo || _me.IsAdmin);
         if (!room.IsLobby) window.HeaderMenu = BuildRoomMenu(roomId, window);
-        window.DeleteRoomRequested += _ =>
-        {
-            RoomInfo current = _joinedRooms.GetValueOrDefault(roomId) ?? room;
-            if (MessageBox.Show(window,
-                    $"'{current.Name}' 방을 삭제할까요?\n\n멤버 {current.MemberCount}명 모두가 방에서 빠지고, 방 목록에서 사라집니다.\n(대화 기록은 서버에 남습니다. 되돌릴 수 없습니다)",
-                    "방 삭제", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes)
-                _client.Send(Packet.Create(PacketType.RoomDelete, target: roomId.ToString()));
-            // 결과: 접속 중인 멤버 모두에게 RoomLeft → 창이 닫히고 목록에서 빠진다
-        };
-        window.LeaveRequested += _ =>
-        {
-            RoomInfo current = _joinedRooms.GetValueOrDefault(roomId) ?? room;
-            // 방장이 나가려면 먼저 방장을 넘길 사람을 고른다 (고르지 않으면 서버가 가장 오래된 멤버에게 자동으로 넘긴다)
-            if (current.OwnerNo == _me.EmployeeNo && (current.Members?.Count ?? 0) > 1)
-            {
-                string? next = PickNewOwner(current, window, "나가기 전에 방장을 넘길 사람을 고르세요",
-                                            skipText: "그냥 나가기 (자동으로 넘기기)");
-                if (next is null) return; // 취소 = 나가지 않음
-                // "그냥 나가기"("")면 넘기지 않고 나간다 → 서버가 가장 먼저 들어온 멤버를 새 방장으로 정하고 방에 알린다
-                if (next.Length > 0)
-                    _client.Send(Packet.Create(PacketType.RoomTransferOwner, body: next, target: roomId.ToString()));
-                _client.Send(Packet.Create(PacketType.RoomLeave, target: roomId.ToString())); // 같은 연결이라 순서대로 처리된다
-                return;
-            }
-            string note = "\n다른 멤버가 남아 있으면 방은 그대로 남습니다. (방을 없애려면 방장이 [방 삭제])";
-            if (current.IsPrivate) note += "\n비공개 방이라 다시 들어오려면 멤버의 초대가 필요합니다.";
-            if (MessageBox.Show(window, $"'{current.Name}' 방에서 나갈까요?{note}", "채팅방 나가기",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                _client.Send(Packet.Create(PacketType.RoomLeave, target: roomId.ToString()));
-            // 창은 서버가 RoomLeft로 확인해 주면 닫힌다
-        };
+        window.DeleteRoomRequested += _ => ConfirmDeleteRoom(roomId, window);
+        window.LeaveRequested += _ => ConfirmLeaveRoom(roomId, window);
         window.FilesRequested += (_, paths) => SendFiles(conv, paths, roomId, null);
         WireWindow(window);
         window.FormClosed += (_, _) =>
