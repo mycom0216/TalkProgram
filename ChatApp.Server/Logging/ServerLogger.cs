@@ -32,7 +32,9 @@ public sealed class ServerLogger : IDisposable
     private void Write(string level, string message)
     {
         // 어느 스레드에서 찍힌 로그인지 보이게 스레드 ID를 함께 남긴다(멀티스레드 디버깅에 유용).
-        string line = $"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC] [{level,-5}] [T{Environment.CurrentManagedThreadId,2}] {message}";
+        // [시각] 서버 PC의 지역 시각 + 시간대(예: +09:00). 운영자가 시계와 바로 비교할 수 있고, 시간대가 함께 있어 UTC로도 환산된다.
+        //        (DB에는 UTC로 저장한다. 로그는 사람이 읽는 것이라 지역 시각으로 쓴다.)
+        string line = $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}] [{level,-5}] [T{Environment.CurrentManagedThreadId,2}] {message}";
         try
         {
             _queue.Add(line);

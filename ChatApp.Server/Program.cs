@@ -26,7 +26,7 @@ if (args.Length > 0 && int.TryParse(args[0], out int port)) config.Port = port;
 string logPath = Path.Combine(
     AppContext.BaseDirectory,
     "logs",
-    $"server-{DateTime.UtcNow:yyyyMMdd}-pid{Environment.ProcessId}.log");
+    $"server-{DateTime.Now:yyyyMMdd}-pid{Environment.ProcessId}.log"); // 로그 파일 날짜도 서버 PC 날짜로
 using var log = new ServerLogger(logPath);
 
 // ── DB 연결 확인 ──
