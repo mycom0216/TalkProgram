@@ -53,6 +53,10 @@ public sealed class MainForm : Form
     private ChatWindow? _lastActiveWindow;
     private List<RoomInfo> _rooms = [];
     private List<UserInfo> _users = [];
+    private List<UserInfo> _friends = [];              // 내 친구 (접속하지 않은 사람 포함, 서버 FriendList)
+    private readonly Panel _userPanel = new();          // 동료 목록 + [친구 추가]
+    private readonly Button _addFriendButton = new();
+    private AddFriendForm? _addFriendForm;
     private bool _openRoomOnJoin;   // 내가 방을 고르거나 만든 경우에만 입장 후 창을 띄운다 (로그인 때 기본 방은 안 띄움)
     private bool _connected = true;
 
@@ -117,6 +121,8 @@ public sealed class MainForm : Form
         BuildLayout();
 
         _userList.ItemActivated += item => { if (item.Tag is UserInfo user) OpenDirect(user, activate: true); };
+        _userList.ItemContextRequested += (item, location) => { if (item.Tag is UserInfo user) ShowUserMenu(user, location); };
+        _addFriendButton.Click += (_, _) => OpenAddFriend();
         _roomList.ItemActivated += item => { if (item.Tag is RoomInfo room) EnterRoom(room); };
         _roomList.ItemContextRequested += (item, location) => { if (item.Tag is RoomInfo room) ShowRoomListMenu(room, location); };
         _usersTab.Name = "UsersTab"; // 화면 자동 테스트(UI Automation)가 찾는 이름
@@ -170,7 +176,21 @@ public sealed class MainForm : Form
 
         // 동료 목록
         _userList.Dock = DockStyle.Fill;
-        _userList.EmptyText = "아직 접속한 동료가 없습니다.";
+        _userList.EmptyText = "친구를 추가하거나 동료가 접속하면 여기에 보입니다.";
+        _addFriendButton.Text = "+  친구 추가";
+        _addFriendButton.Name = "AddFriendButton"; // 화면 자동 테스트(UI Automation)가 찾는 이름
+        _addFriendButton.Dock = DockStyle.Bottom;
+        _addFriendButton.Height = S(42);
+        _addFriendButton.FlatStyle = FlatStyle.Flat;
+        _addFriendButton.FlatAppearance.BorderSize = 0;
+        _addFriendButton.BackColor = Theme.Primary;
+        _addFriendButton.ForeColor = Color.White;
+        _addFriendButton.Font = Theme.BodyBold;
+        _addFriendButton.Cursor = Cursors.Hand;
+        _userPanel.Dock = DockStyle.Fill;
+        _userPanel.Controls.Add(_userList);
+        _userPanel.Controls.Add(_addFriendButton);
+        _userList.BringToFront();
 
         // 채팅방 목록 + [새 채팅방]
         _roomList.Dock = DockStyle.Fill;
@@ -200,12 +220,12 @@ public sealed class MainForm : Form
         _statusLabel.BackColor = Theme.Background;
         _statusLabel.AutoEllipsis = true;
 
-        Controls.Add(_userList);
+        Controls.Add(_userPanel);
         Controls.Add(_roomPanel);
         Controls.Add(tabBar);
         Controls.Add(_header);
         Controls.Add(_statusLabel);
-        _userList.BringToFront();
+        _userPanel.BringToFront();
         _roomPanel.BringToFront();
     }
 
@@ -246,7 +266,7 @@ public sealed class MainForm : Form
     {
         _showingRooms = rooms;
         _roomPanel.Visible = rooms;
-        _userList.Visible = !rooms;
+        _userPanel.Visible = !rooms;
         _usersTab.ForeColor = rooms ? Theme.SubText : Theme.Primary;
         _roomsTab.ForeColor = rooms ? Theme.Primary : Theme.SubText;
         _usersTab.Invalidate();
@@ -268,6 +288,7 @@ public sealed class MainForm : Form
         _client.Disconnected += OnDisconnected;
         _client.ReleaseHeld(); // 로그인 직후 받아 둔 방 입장 결과·접속자·방 목록을 이제 전달받는다
         _client.Send(Packet.Create(PacketType.ServerInfoReq)); // 파일 최대 크기·최신 버전 확인
+        _client.Send(Packet.Create(PacketType.FriendListReq)); // 내 친구 목록
 
         // [주의] 로그인 창이 닫히고 이 창이 이벤트를 구독하기 "전에" 연결이 끊겼다면 Disconnected 알림을 놓쳤다.
         //        그대로 두면 "연결됨"으로 보이는데 아무것도 오지 않는다 → 여기서 한 번 확인해 재접속을 시작한다.
@@ -456,6 +477,7 @@ public sealed class MainForm : Form
         _header.Invalidate();
         SetStatus(ConnectedStatusText(), Theme.SubText);
         _createRoomButton.Enabled = true;
+        _client.Send(Packet.Create(PacketType.FriendListReq)); // 끊긴 사이 바뀌었을 수 있다
 
         foreach (ChatWindow window in OpenWindows())
         {
@@ -562,6 +584,20 @@ public sealed class MainForm : Form
                 if (_me.IsAdmin)
                     ShowToast("관리자 알림", packet.Body ?? "", Theme.AppName, () => OpenAdmin(showPending: true));
                 break;
+
+            case PacketType.FriendList:
+                _friends = packet.GetData<List<UserInfo>>() ?? [];
+                foreach (UserInfo f in _friends) _knownPeers.TryAdd(f.EmployeeNo, f);
+                if (!string.IsNullOrEmpty(packet.Body)) SetStatus($"● {packet.Body}", Theme.SubText);
+                RefreshUserList();
+                break;
+
+            case PacketType.FriendSearchRes:
+            case PacketType.PhoneInfo:
+                break; // 친구 추가 창·휴대폰 번호 창이 직접 받는다
+
+            case PacketType.Error when _addFriendForm is { IsDisposed: false, IsWaiting: true }:
+                break; // 친구 추가 창이 기다리던 오류 → 그 창이 보여 준다
 
             case PacketType.Error:
                 var error = new ChatItem { Kind = ChatItemKind.Error, Text = packet.Body ?? "오류가 발생했습니다." };
@@ -696,6 +732,7 @@ public sealed class MainForm : Form
         _statusMenu.Items.Add("상태 메시지 바꾸기...", null, (_, _) => ChangeStatusMessage());
         _statusMenu.Items.Add(new ToolStripSeparator());
         _statusMenu.Items.Add("비밀번호 변경...", null, (_, _) => ChangePassword());
+        _statusMenu.Items.Add("내 휴대폰 번호 설정...", null, (_, _) => EditPhone());
         // [주의] 관리자 메뉴는 로그인할 때 받은 권한(Role)이 ADMIN일 때만 보인다. 이건 화면 편의일 뿐이고,
         //        진짜 권한 확인은 서버가 관리 요청마다 다시 한다(메뉴를 억지로 띄워도 서버가 거절).
         if (_me.IsAdmin)
@@ -703,6 +740,7 @@ public sealed class MainForm : Form
         _statusMenu.Items.Add(new ToolStripSeparator());
         _statusMenu.Items.Add("전체 대화 검색...", null, (_, _) => OpenSearch());
         _statusMenu.Items.Add("동료 찾기 (오프라인 포함)...", null, (_, _) => FindPeople());
+        _statusMenu.Items.Add("친구 추가 (아이디·휴대폰 번호)...", null, (_, _) => OpenAddFriend());
         _statusMenu.Items.Add(new ToolStripSeparator());
         _statusMenu.Items.Add("로그아웃", null, (_, _) => Logout());
         // 메뉴를 열 때 지금 상태에 체크 표시
@@ -1992,6 +2030,59 @@ public sealed class MainForm : Form
         OpenDirect(user, activate: true);
     }
 
+    // ───────────────────────── 친구 ─────────────────────────
+
+    private bool IsFriend(string employeeNo) => _friends.Any(f => string.Equals(f.EmployeeNo, employeeNo, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>친구 추가 창 (하나만 띄우고, 이미 열려 있으면 앞으로).</summary>
+    private void OpenAddFriend()
+    {
+        if (_addFriendForm is { IsDisposed: false })
+        {
+            BringToFront(_addFriendForm);
+            return;
+        }
+        _addFriendForm = new AddFriendForm(_client);
+        _addFriendForm.ChatRequested += user =>
+        {
+            _knownPeers[user.EmployeeNo] = user;
+            OpenDirect(user, activate: true);
+        };
+        _addFriendForm.Show(this);
+    }
+
+    /// <summary>내 휴대폰 번호 등록·변경 (친구가 번호로 나를 찾을 수 있게).</summary>
+    private void EditPhone()
+    {
+        using var form = new PhoneForm(_client);
+        form.ShowDialog(this);
+    }
+
+    /// <summary>동료·친구 목록에서 오른쪽 클릭: 1:1 대화, 친구 추가/삭제.</summary>
+    private void ShowUserMenu(UserInfo user, Point location)
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("1:1 대화", null, (_, _) => OpenDirect(user, activate: true));
+        menu.Items.Add(new ToolStripSeparator());
+        if (IsFriend(user.EmployeeNo))
+        {
+            ToolStripItem remove = menu.Items.Add("친구 삭제", null, (_, _) =>
+            {
+                if (MessageBox.Show(this, $"{user.DisplayName}님을 친구 목록에서 뺄까요?\n대화 내용은 그대로 남습니다.", Theme.AppName,
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                    _client.Send(Packet.Create(PacketType.FriendRemove, body: user.EmployeeNo));
+            });
+            remove.ForeColor = Theme.Danger;
+            remove.Enabled = _connected;
+        }
+        else
+        {
+            menu.Items.Add("친구 추가", null, (_, _) => _client.Send(Packet.Create(PacketType.FriendAdd, body: user.EmployeeNo))).Enabled = _connected;
+        }
+        menu.Closed += (_, _) => BeginInvoke(new Action(menu.Dispose));
+        menu.Show(_userList, location);
+    }
+
     /// <summary>로그아웃 → 연결을 끊고 로그인 창으로 돌아간다 (Program이 LogoutRequested를 본다).</summary>
     private void Logout()
     {
@@ -2168,7 +2259,40 @@ public sealed class MainForm : Form
     {
         var others = _users.Where(u => u.EmployeeNo != _me.EmployeeNo).ToList();
         var items = new List<CardItem>();
-        foreach (var dept in others.GroupBy(u => u.Department).OrderBy(g => g.Key))
+
+        // ① 친구 (접속 중인 친구가 위, 접속하지 않은 친구는 회색). 친구는 아래 부서 목록에 다시 나오지 않는다.
+        var onlineByNo = others.GroupBy(u => u.EmployeeNo, StringComparer.OrdinalIgnoreCase)
+                               .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var friendNos = _friends.Select(f => f.EmployeeNo).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (_friends.Count > 0)
+        {
+            int onlineFriends = _friends.Count(f => onlineByNo.ContainsKey(f.EmployeeNo));
+            items.Add(new CardItem { IsHeader = true, Key = "dept:~friends", Title = $"친구 ({onlineFriends}/{_friends.Count})" });
+            foreach (UserInfo friend in _friends.OrderByDescending(f => onlineByNo.ContainsKey(f.EmployeeNo)).ThenBy(f => f.Name))
+            {
+                bool online = onlineByNo.TryGetValue(friend.EmployeeNo, out UserInfo? live);
+                UserInfo shown = live ?? friend;
+                int unread = UnreadOf(Conversation.DirectKey(friend.EmployeeNo));
+                items.Add(new CardItem
+                {
+                    Key = $"user:{friend.EmployeeNo}",
+                    Title = shown.DisplayName,
+                    Subtitle = online ? UserSubtitle(shown)
+                        : shown.StatusMessage.Length > 0 ? $"접속하지 않음 · {shown.StatusMessage}" : $"접속하지 않음 · {shown.Department}",
+                    StatusColor = online ? Theme.PresenceColor(shown.Presence) : Theme.Offline,
+                    AvatarText = shown.Name,
+                    AvatarColor = Theme.AvatarColor(friend.EmployeeNo),
+                    ShowStatus = true,
+                    Online = online,
+                    Badge = unread > 0 ? unread.ToString() : null,
+                    BadgeAlert = unread > 0,
+                    Tag = shown,
+                });
+            }
+        }
+
+        // ② 접속 중인 동료 (부서별)
+        foreach (var dept in others.Where(u => !friendNos.Contains(u.EmployeeNo)).GroupBy(u => u.Department).OrderBy(g => g.Key))
 
         {
             items.Add(new CardItem { IsHeader = true, Key = $"dept:{dept.Key}", Title = $"{dept.Key} ({dept.Count()})" });
@@ -2194,7 +2318,8 @@ public sealed class MainForm : Form
         // 접속하지 않은 사람과의 1:1 (안 읽은 메시지가 있거나 이번에 대화한 사람) → 목록 아래에 따로
         var onlineNos = others.Select(u => u.EmployeeNo).ToHashSet();
         var offline = _conversations.Values
-            .Where(c => c.Key.StartsWith("dm:") && !onlineNos.Contains(c.Key["dm:".Length..]) && (c.Unread > 0 || c.Items.Count > 0))
+            .Where(c => c.Key.StartsWith("dm:") && !onlineNos.Contains(c.Key["dm:".Length..]) && !friendNos.Contains(c.Key["dm:".Length..])
+                        && (c.Unread > 0 || c.Items.Count > 0))
             .Select(c => (Conv: c, User: KnownPeer(c.Key["dm:".Length..], c.Title)))
             .OrderByDescending(x => x.Conv.Unread).ThenBy(x => x.User.Name).ToList();
         if (offline.Count > 0)

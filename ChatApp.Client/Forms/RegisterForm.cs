@@ -23,6 +23,7 @@ public sealed class RegisterForm : Form
     private readonly TextBox _name = new() { MaxLength = 30 };
     private readonly TextBox _department = new() { MaxLength = 30 };
     private readonly TextBox _position = new() { MaxLength = 20 };
+    private readonly TextBox _phone = new() { MaxLength = 20, PlaceholderText = "선택 · 010-1234-5678" };
     private readonly TextBox _password = new() { UseSystemPasswordChar = true, MaxLength = 64 };
     private readonly TextBox _passwordConfirm = new() { UseSystemPasswordChar = true, MaxLength = 64 };
     private readonly Button _submitButton = UiHelper.CreateButton("가입", primary: true);
@@ -71,6 +72,7 @@ public sealed class RegisterForm : Form
         UiHelper.AddFieldRow(table, "이름", _name, 260);
         UiHelper.AddFieldRow(table, "부서", _department, 260);
         UiHelper.AddFieldRow(table, "직급", _position, 260);
+        UiHelper.AddFieldRow(table, "휴대폰 (선택)", _phone, 260);
         UiHelper.AddFieldRow(table, "비밀번호", _password, 260);
         UiHelper.AddFieldRow(table, "비밀번호 확인", _passwordConfirm, 260);
         UiHelper.AddSpanRow(table, new Label
@@ -143,6 +145,14 @@ public sealed class RegisterForm : Form
             return;
         }
 
+        // 휴대폰 번호는 선택. 적었으면 형식만 먼저 확인한다 (친구가 번호로 나를 찾을 때만 쓰고 공개하지 않음)
+        if (_phone.Text.Trim().Length > 0 && PhoneRules.Normalize(_phone.Text) is null)
+        {
+            ShowStatus("휴대폰 번호 형식이 올바르지 않습니다. (예: 010-1234-5678)", error: true);
+            _phone.Focus();
+            return;
+        }
+
         var request = new RegisterRequest
         {
             ProtocolVersion = ProtocolInfo.Version,
@@ -152,6 +162,7 @@ public sealed class RegisterForm : Form
             Department = _department.Text.Trim(),
             Position = _position.Text.Trim(),
             Password = _password.Text,
+            Phone = _phone.Text.Trim().Length > 0 ? _phone.Text.Trim() : null,
         };
 
         _submitButton.Enabled = false;

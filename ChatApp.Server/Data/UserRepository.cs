@@ -105,15 +105,16 @@ public sealed class UserRepository(Db db)
     /// 두 사람이 동시에 같은 사원번호로 가입해도 DB 제약 때문에 한 명만 성공한다.
     /// </summary>
     public bool TryInsert(string employeeNo, string email, string name, string department, string position,
-                          string passwordHash, string salt, string status)
+                          string passwordHash, string salt, string status, string? phone = null)
     {
         using DbConnection conn = db.Open();
         using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO users (employee_no, email, name, department, position, password_hash, salt, status, auth_source)
-            VALUES (@no, @email, @name, @dept, @pos, @hash, @salt, @status, 'LOCAL')
+            INSERT INTO users (employee_no, email, phone, name, department, position, password_hash, salt, status, auth_source)
+            VALUES (@no, @email, @phone, @name, @dept, @pos, @hash, @salt, @status, 'LOCAL')
             """;
         cmd.AddParam("@no", employeeNo);
+        cmd.AddParam("@phone", phone);
         cmd.AddParam("@email", email);
         cmd.AddParam("@name", name);
         cmd.AddParam("@dept", department);
@@ -429,6 +430,113 @@ public sealed class UserRepository(Db db)
         return r.Read()
             ? new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4) }
             : null;
+    }
+
+    // ───────── 친구·휴대폰 번호 (FriendService) ─────────
+
+    /// <summary>휴대폰 번호(숫자만)로 사용 중인 계정 찾기.</summary>
+    public UserInfo? FindActiveByPhone(string phone)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT employee_no, name, department, position, role FROM users WHERE phone = @phone AND status = 'ACTIVE'";
+        cmd.AddParam("@phone", phone);
+        using DbDataReader r = cmd.ExecuteReader();
+        return r.Read()
+            ? new UserInfo { EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3), Role = r.GetString(4) }
+            : null;
+    }
+
+    /// <summary>내 휴대폰 번호 (숫자만, 없으면 null).</summary>
+    public string? GetPhone(string employeeNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT phone FROM users WHERE employee_no = @no";
+        cmd.AddParam("@no", employeeNo);
+        return cmd.ExecuteScalar() is string phone ? phone : null;
+    }
+
+    /// <summary>휴대폰 번호 저장(null = 지우기). 다른 계정이 이미 쓰는 번호면 false (UNIQUE 제약).</summary>
+    public bool SetPhone(string employeeNo, string? phone)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE users SET phone = @phone WHERE employee_no = @no";
+        cmd.AddParam("@phone", phone);
+        cmd.AddParam("@no", employeeNo);
+        try
+        {
+            cmd.ExecuteNonQuery();
+            return true;
+        }
+        catch (DbException ex) when (ex.SqlState == "23000") // 같은 번호가 이미 있음
+        {
+            return false;
+        }
+    }
+
+    /// <summary>내 친구 목록 (사용 중인 계정만, 이름순).</summary>
+    public List<UserInfo> ListFriends(string ownerNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT u.employee_no, u.name, u.department, u.position, u.role, COALESCE(u.status_message, '')
+            FROM friends f JOIN users u ON u.employee_no = f.friend_no
+            WHERE f.owner_no = @owner AND u.status = 'ACTIVE'
+            ORDER BY u.name LIMIT 2000
+            """;
+        cmd.AddParam("@owner", ownerNo);
+        var list = new List<UserInfo>();
+        using DbDataReader r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(new UserInfo
+            {
+                EmployeeNo = r.GetString(0), Name = r.GetString(1), Department = r.GetString(2), Position = r.GetString(3),
+                Role = r.GetString(4), StatusMessage = r.GetString(5),
+            });
+        return list;
+    }
+
+    public bool IsFriend(string ownerNo, string friendNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 1 FROM friends WHERE owner_no = @owner AND friend_no = @friend";
+        cmd.AddParam("@owner", ownerNo);
+        cmd.AddParam("@friend", friendNo);
+        return cmd.ExecuteScalar() is not null;
+    }
+
+    public int CountFriends(string ownerNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM friends WHERE owner_no = @owner";
+        cmd.AddParam("@owner", ownerNo);
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    /// <summary>친구 추가. 이미 친구면 false. (INSERT IGNORE: 두 번 눌러도 한 줄만)</summary>
+    public bool AddFriend(string ownerNo, string friendNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "INSERT IGNORE INTO friends (owner_no, friend_no, created_at) VALUES (@owner, @friend, UTC_TIMESTAMP(3))";
+        cmd.AddParam("@owner", ownerNo);
+        cmd.AddParam("@friend", friendNo);
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
+    public bool RemoveFriend(string ownerNo, string friendNo)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM friends WHERE owner_no = @owner AND friend_no = @friend";
+        cmd.AddParam("@owner", ownerNo);
+        cmd.AddParam("@friend", friendNo);
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     /// <summary>지금 사용 중(ACTIVE) 계정인지. 로그인 처리 도중 정지된 경우를 잡으려고 로그인 마지막에 한 번 더 확인한다.</summary>

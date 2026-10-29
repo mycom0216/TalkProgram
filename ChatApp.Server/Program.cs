@@ -61,7 +61,7 @@ if (schema < Db.RequiredSchemaVersion)
     {
         [2] = "migrate_002_files.sql", [3] = "migrate_003_status.sql", [4] = "migrate_004_admin.sql",
         [5] = "migrate_005_rooms_messages.sql", [6] = "migrate_006_room_notices.sql", [7] = "migrate_007_message_edit.sql",
-        [8] = "migrate_008_login_tokens.sql", [9] = "migrate_009_utc_timestamps.sql", [10] = "migrate_010_device_login_tokens.sql",
+        [8] = "migrate_008_login_tokens.sql", [9] = "migrate_009_utc_timestamps.sql", [10] = "migrate_010_device_login_tokens.sql", [11] = "migrate_011_friends.sql",
     };
     for (int version = Math.Max(schema + 1, 2); version <= Db.RequiredSchemaVersion; version++)
     {

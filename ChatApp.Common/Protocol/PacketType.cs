@@ -127,4 +127,15 @@ public enum PacketType
     Typing,            // 입력 중 상태 (Data = TypingRequest)
     TypingUpdate,      // 입력 중 상태 전달 (Data = TypingInfo)
     RoomCapacity,      // 방 정원 바꾸기 (Target = 방 번호, Body = 새 정원). 방장 또는 관리자만. 결과는 RoomUpdate
+
+    // 친구 (한쪽 방향: 내 목록에만 추가)
+    FriendListReq,     // 내 친구 목록 요청
+    FriendList,        // 내 친구 목록 (Data = List<UserInfo>, Body = 안내 문구: 추가·삭제 결과)
+    FriendSearchReq,   // 아이디(사원번호)·휴대폰 번호로 찾기 (Data = FriendSearchRequest). 정확히 일치할 때만
+    FriendSearchRes,   // 찾기 결과 (Data = FriendSearchResult)
+    FriendAdd,         // 친구 추가 (Body = 사원번호) → FriendList
+    FriendRemove,      // 친구 삭제 (Body = 사원번호) → FriendList
+    PhoneInfoReq,      // 내 휴대폰 번호 요청 (본인만)
+    PhoneUpdate,       // 내 휴대폰 번호 등록·변경 (Body = 번호, 빈 문자열 = 지우기) → PhoneInfo
+    PhoneInfo,         // 내 휴대폰 번호 (Data = PhoneInfo, 실패하면 Success=false + Body)
 }

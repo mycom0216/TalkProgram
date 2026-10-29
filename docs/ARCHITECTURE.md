@@ -213,6 +213,7 @@ TCP는 메시지 경계가 없는 바이트 흐름이라, 모든 패킷을 아�
 | 메시지 기능 | `MessageDelete/Deleted`, `MessageEditReq/Edited`, `Reaction/ReactionUpdate`, `ReadMark/ReadUpdate`, `SearchReq/Res` (댓글은 `ReplyTo`) |
 | 채팅방 | `RoomListReq/RoomList`, `RoomCreate`, `RoomJoin`, `RoomRes`, `RoomInvite`, `RoomLeave/RoomLeft`, `RoomTransferOwner`, `RoomNotice`, `RoomDelete`, `RoomUpdate`, `RoomFilesReq/Res` |
 | 사람 | `UserList`(접속자), `DirectoryReq/Directory`(회사 전체), `StatusUpdate` |
+| 친구 | `FriendListReq/FriendList`, `FriendSearchReq/FriendSearchRes`(아이디·휴대폰 번호, 정확히 일치), `FriendAdd`, `FriendRemove`, `PhoneInfoReq/PhoneInfo`, `PhoneUpdate` |
 | 파일 | `FileUploadReq/Res`, `FileChunk`, `FileUploadEnd`, `FileUploadCancel`, `FileMsg`, `FileDownloadReq/Res`, `FileDownloadEnd`, `FileDownloadCancel` |
 | 관리자 | `AdminUserListReq/AdminUserList`, `AdminActionReq/Res`, `AdminAuditReq/AdminAudit`, `AdminStatsReq/AdminStats`, `AdminNotify` |
 
@@ -268,6 +269,7 @@ erDiagram
     users ||--o{ messages : "보냄"
     users ||--o{ files : "올림"
     users ||--o{ login_tokens : "기기별 토큰"
+    users ||--o{ friends : "내 친구"
     users ||--o{ direct_reads : "1:1 읽음"
     rooms ||--o{ room_members : "멤버"
     rooms ||--o{ messages : "방 대화"
@@ -279,6 +281,7 @@ erDiagram
     users {
         varchar employee_no PK
         varchar email UK
+        varchar phone UK "선택, 숫자만"
         varchar name
         varchar department
         varchar position
@@ -322,7 +325,7 @@ erDiagram
     }
 ```
 
-그 밖에 `message_reactions`(공감), `direct_reads`(1:1 읽음 위치), `room_notices`(방 공지), `login_tokens`(기기별 자동 로그인), `audit_logs`(감사 기록), `schema_version`(DB 버전)이 있다.
+그 밖에 `message_reactions`(공감), `direct_reads`(1:1 읽음 위치), `room_notices`(방 공지), `login_tokens`(기기별 자동 로그인), `friends`(내 친구, 한쪽 방향), `audit_logs`(감사 기록), `schema_version`(DB 버전)이 있다.
 
 - **시각은 UTC로 저장**하고 화면에서 내 PC 시간대로 바꾼다 (`migrate_009`). 지사·출장처럼 시간대가 달라도 순서와 읽음 표시가 맞는다.
 - **메시지 번호는 서버가 매긴다.** 시작할 때 DB의 가장 큰 번호를 읽고 `Interlocked`로 1씩 늘린다. 저장 전에 번호가 정해져 있어야 바로 댓글·공감·삭제를 할 수 있다.
@@ -334,6 +337,7 @@ erDiagram
 | `schema.sql` | 새로 설치할 때 한 번 (최신 구조 전체) |
 | `migrate_002` ~ `005` | 파일, 상태 메시지, 관리자, 영구·비공개 방·답장·공감·읽음 |
 | `migrate_006` ~ `010` | 방 공지, 메시지 수정, 자동 로그인 토큰, UTC 시각, 기기별 토큰 |
+| `migrate_011` | 친구 목록(`friends`), 휴대폰 번호(`users.phone`, UNIQUE) |
 
 ---
 
@@ -347,6 +351,7 @@ erDiagram
 | 권한 우회 | 모든 관리·삭제·방장 동작을 서버가 다시 확인. 남의 방·남의 1:1은 검색·답장 인용·파일 받기 모두 불가 |
 | 악성 파일 | 파일 이름 정리(경로 조작 차단), 저장은 파일 ID 이름으로. 받은 파일에 "인터넷에서 받음" 표시(SmartScreen 동작), 실행 파일·매크로 문서 열기 전 경고 |
 | 자원 고갈 | 연결 수·IP당 연결 수·로그인 제한 시간, 패킷 1MB 제한, 송신 큐 용량 제한, 디스크 여유 확인, 멈춘 업로드 정리 |
+| 개인정보(휴대폰 번호) | 번호는 숫자만 저장하고 본인 외에는 보여 주지 않음. 친구 찾기는 정확히 일치할 때만, 결과에는 가린 번호(010-****-5678), 1초에 한 번만 찾기. 서버 로그에도 번호를 남기지 않음 |
 | 기록 조작 | 관리 동작·로그인·파일·방 삭제·방장 변경을 감사 로그에 남김(별도 스레드, 지울 수 없음) |
 
 ---

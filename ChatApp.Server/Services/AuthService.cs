@@ -134,6 +134,13 @@ public sealed class AuthService
         // [개념] is string pwError: 결과가 null이 아니고 string이면 pwError 변수에 담아서 if 안으로 들어간다(형식 패턴).
         if (ValidatePassword(req.Password) is string pwError)
             return (false, pwError);
+        // 휴대폰 번호는 선택. 적었으면 형식을 확인한다 (친구가 번호로 나를 찾을 때만 쓰고 공개하지 않는다)
+        string? phone = null;
+        if (!string.IsNullOrWhiteSpace(req.Phone))
+        {
+            phone = PhoneRules.Normalize(req.Phone);
+            if (phone is null) return (false, "휴대폰 번호 형식이 올바르지 않습니다. (예: 010-1234-5678)");
+        }
 
         // [개념] 비밀번호는 절대 원문으로 저장하지 않는다. PBKDF2(여러 번 반복하는 해시) + salt(사람마다 다른 무작위 값)로 저장.
         //   - 해시: 되돌릴 수 없는 변환. DB가 유출돼도 원래 비밀번호를 바로 알 수 없다.
@@ -145,8 +152,8 @@ public sealed class AuthService
 
         // [주의] "먼저 SELECT로 있는지 확인 → 없으면 INSERT" 방식은 두 사람이 동시에 같은 사원번호로 가입하면 둘 다 통과할 수 있다(경쟁 상태).
         //   그래서 확인 없이 바로 INSERT하고, DB의 PRIMARY KEY/UNIQUE 제약이 중복을 거절하게 한다 → 동시에 와도 딱 한 명만 성공.
-        if (!_users.TryInsert(no, email, name, dept, pos, hash, salt, status))
-            return (false, "이미 가입된 사원번호 또는 이메일입니다.");
+        if (!_users.TryInsert(no, email, name, dept, pos, hash, salt, status, phone))
+            return (false, phone is null ? "이미 가입된 사원번호 또는 이메일입니다." : "이미 가입된 사원번호·이메일 또는 휴대폰 번호입니다.");
 
         return (true, _config.AutoApprove
             ? "회원가입이 완료되었습니다. 로그인하세요."

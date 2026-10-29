@@ -33,6 +33,7 @@ public sealed class PacketHandler
     private readonly RateLimiter _registerLimiter = new(capacity: 3, refillPerMinute: 0.3);
 
     public ServerLogger Log { get; }
+    private readonly FriendService _friendService;
 
     public PacketHandler(SessionManager sessions, RoomManager rooms, AuthService auth, RoomRepository roomRepository,
                          MessageRepository messageRepository, UserRepository users, FileService files, MessageStore messages,
@@ -49,6 +50,7 @@ public sealed class PacketHandler
         Log = log;
         _roomService = new RoomService(sessions, rooms, roomRepository, users, messages, audit, log, BroadcastRoomList);
         _messageService = new MessageService(sessions, rooms, _roomService, messages, messageRepository, users, audit, log);
+        _friendService = new FriendService(sessions, users, log);
     }
 
     public void Handle(ClientSession session, Packet packet)
@@ -106,6 +108,14 @@ public sealed class PacketHandler
                 case PacketType.RoomTransferOwner: _roomService.HandleTransferOwner(session, packet); break;
                 case PacketType.RoomNotice: _roomService.HandleNotice(session, packet); break;
                 case PacketType.RoomCapacity: _roomService.HandleCapacity(session, packet); break;
+
+                // 친구·휴대폰 번호
+                case PacketType.FriendListReq: _friendService.SendList(session); break;
+                case PacketType.FriendSearchReq: _friendService.HandleSearch(session, packet); break;
+                case PacketType.FriendAdd: _friendService.HandleAdd(session, packet); break;
+                case PacketType.FriendRemove: _friendService.HandleRemove(session, packet); break;
+                case PacketType.PhoneInfoReq: _friendService.HandlePhoneInfo(session); break;
+                case PacketType.PhoneUpdate: _friendService.HandlePhoneUpdate(session, packet); break;
 
                 // 파일
                 case PacketType.FileUploadReq: _files.HandleUploadRequest(session, packet); break;

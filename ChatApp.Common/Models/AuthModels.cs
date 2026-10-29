@@ -26,6 +26,9 @@ public sealed class RegisterRequest
     //   서버는 그대로 저장하지 않고 해시(PasswordHasher)로 바꿔 저장한다.
     public string Password { get; set; } = "";
 
+    /// <summary>휴대폰 번호 (선택). 친구가 번호로 나를 찾을 때만 쓰고, 다른 사람에게 보여 주지 않는다.</summary>
+    public string? Phone { get; set; }
+
     /// <summary>클라이언트의 프로토콜 버전 (ProtocolInfo.Version). 옛 클라이언트는 이 칸이 없어 0으로 온다.</summary>
     // [주의] 기본값을 ProtocolInfo.Version으로 두면 안 된다. JSON에 칸이 없으면 기본값이 그대로 남아,
     //   버전을 모르는 옛 클라이언트도 "최신"으로 보이게 된다. 그래서 0으로 두고 보내는 쪽이 직접 채운다.

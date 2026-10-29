@@ -47,7 +47,7 @@ public sealed class Db(string connectionString)
     }
 
     /// <summary>이 프로그램이 필요로 하는 DB 스키마 버전 (db/migrate_00N 스크립트 번호).</summary>
-    public const int RequiredSchemaVersion = 10;
+    public const int RequiredSchemaVersion = 11;
 
     public static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
     public static DateTime? AsUtc(DateTime? value) => value is DateTime dt ? AsUtc(dt) : null;

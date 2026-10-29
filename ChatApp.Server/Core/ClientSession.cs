@@ -141,6 +141,9 @@ public sealed class ClientSession
     /// <summary>마지막 검색 시각 (검색 간격 제한용, Interlocked로 읽고 쓴다).</summary>
     internal long LastSearchTicks;
 
+    /// <summary>마지막 친구 찾기 시각 (번호를 연달아 바꿔 가며 찾는 것을 막는 간격 제한).</summary>
+    internal long LastFriendSearchTicks;
+
     /// <summary>접속한 시각 (Environment.TickCount64). 로그인 제한 시간 확인용.</summary>
     public long ConnectedTicks { get; } = Environment.TickCount64;
 

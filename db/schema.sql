@@ -17,6 +17,7 @@ FLUSH PRIVILEGES;
 CREATE TABLE IF NOT EXISTS users (
   employee_no         VARCHAR(20)  PRIMARY KEY,           -- 사원번호 = 로그인 아이디
   email               VARCHAR(100) NOT NULL UNIQUE,       -- 사내 도메인만 허용
+  phone               VARCHAR(11)  NULL UNIQUE,           -- 휴대폰 번호(숫자만, 선택). 친구 찾기에만 쓰고 공개하지 않는다
   name                VARCHAR(30)  NOT NULL,
   department          VARCHAR(30)  NOT NULL,
   position            VARCHAR(20)  NOT NULL,              -- 직급
@@ -146,7 +147,18 @@ CREATE TABLE IF NOT EXISTS schema_version (
   applied_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 INSERT IGNORE INTO schema_version (version, description) VALUES
-  (2, 'files'), (3, 'status_message'), (4, 'admin'), (5, 'rooms_messages'), (6, 'room_notices'), (7, 'message_edit'), (8, 'login_tokens'), (9, 'utc_timestamps'), (10, 'device_login_tokens');
+  (2, 'files'), (3, 'status_message'), (4, 'admin'), (5, 'rooms_messages'), (6, 'room_notices'), (7, 'message_edit'), (8, 'login_tokens'), (9, 'utc_timestamps'), (10, 'device_login_tokens'), (11, 'friends_phone');
+
+-- 친구: owner가 friend를 자기 목록에 추가 (한쪽 방향, 상대 승인 없음)
+CREATE TABLE IF NOT EXISTS friends (
+  owner_no    VARCHAR(20) NOT NULL,
+  friend_no   VARCHAR(20) NOT NULL,
+  created_at  DATETIME(3) NOT NULL,
+  PRIMARY KEY (owner_no, friend_no),
+  INDEX idx_friends_friend (friend_no),
+  CONSTRAINT fk_friends_owner  FOREIGN KEY (owner_no)  REFERENCES users(employee_no) ON DELETE CASCADE,
+  CONSTRAINT fk_friends_friend FOREIGN KEY (friend_no) REFERENCES users(employee_no) ON DELETE CASCADE
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS login_tokens (
   employee_no VARCHAR(20) NOT NULL,
