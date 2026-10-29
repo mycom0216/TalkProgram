@@ -97,6 +97,12 @@ public sealed class ServerConfig
     /// <summary>주고받은 파일 보관 일수. 지난 파일은 서버 디스크에서도 지운다.</summary>
     public int FileRetentionDays { get; set; } = 180;
 
+    /// <summary>
+    /// 삭제된 방(또는 마지막 멤버가 나가 닫힌 방)의 파일을 디스크에서 지우기까지의 일수. 0 = 다음 정리 때 바로, -1 = 지우지 않음.
+    /// [왜] 닫힌 방의 파일은 아무도 받을 수 없는데 디스크만 차지한다. 대화 기록(감사용)은 남기고 파일 원본만 지운다.
+    /// </summary>
+    public int ClosedRoomFileDays { get; set; } = 0;
+
     /// <summary>감사 로그 보관 일수. 보안 점검 대비로 대화보다 길게 둔다.</summary>
     public int AuditRetentionDays { get; set; } = 730;
 

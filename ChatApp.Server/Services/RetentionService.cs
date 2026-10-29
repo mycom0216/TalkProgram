@@ -55,13 +55,22 @@ public sealed class RetentionService(Db db, FileService files, ServerConfig conf
         }
         if (config.FileRetentionDays > 0)
         {
-            int n = DeleteOldFiles(config.FileRetentionDays);
+            int n = DeleteFiles("SELECT file_id, stored_path FROM files WHERE status = 'DONE' AND created_at < NOW() - INTERVAL @days DAY LIMIT 500",
+                                config.FileRetentionDays);
             if (n > 0) log.Info($"정리: {config.FileRetentionDays}일 지난 파일 {n}개 (디스크에서도 삭제)");
+        }
+        if (config.ClosedRoomFileDays >= 0)
+        {
+            // 삭제된 방·닫힌 방의 파일: 아무도 받을 수 없으므로 원본을 지운다 (대화 기록은 보관 기간까지 남김)
+            int n = DeleteFiles("SELECT f.file_id, f.stored_path FROM files f JOIN rooms r ON r.room_id = f.room_id " +
+                                "WHERE f.status = 'DONE' AND r.closed_at IS NOT NULL AND r.closed_at <= NOW() - INTERVAL @days DAY LIMIT 500",
+                                config.ClosedRoomFileDays);
+            if (n > 0) log.Info($"정리: 삭제·닫힌 방의 파일 {n}개 (디스크에서도 삭제)");
         }
     }
 
-    /// <summary>오래된 파일: 디스크의 파일(+미리보기)을 지우고 DB 행도 지운다.</summary>
-    private int DeleteOldFiles(int days)
+    /// <summary>sql로 고른 파일(file_id, stored_path를 500개씩): 디스크의 파일(+미리보기)을 지우고 DB 행도 지운다.</summary>
+    private int DeleteFiles(string sql, int days)
     {
         int total = 0;
         while (!_stop.IsCancellationRequested)
@@ -70,7 +79,7 @@ public sealed class RetentionService(Db db, FileService files, ServerConfig conf
             using (DbConnection conn = db.Open())
             using (DbCommand cmd = conn.CreateCommand())
             {
-                cmd.CommandText = "SELECT file_id, stored_path FROM files WHERE status = 'DONE' AND created_at < NOW() - INTERVAL @days DAY LIMIT 500";
+                cmd.CommandText = sql;
                 cmd.AddParam("@days", days);
                 using DbDataReader r = cmd.ExecuteReader();
                 while (r.Read()) batch.Add((r.GetString(0), r.GetString(1)));
