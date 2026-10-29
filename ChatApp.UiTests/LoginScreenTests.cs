@@ -15,7 +15,12 @@ public sealed class LoginScreenTests
             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "ChatApp.Client", "bin", "Debug", "net10.0-windows", "ChatApp.Client.exe"));
         Assert.True(File.Exists(client), $"클라이언트 실행 파일을 찾을 수 없습니다: {client}");
 
-        using var app = Application.Launch(client);
+        // 내 PC의 진짜 설정(자동 로그인 등)에 영향받지 않게, 빈 임시 설정 폴더로 띄운다
+        string settingsDir = Path.Combine(Path.GetTempPath(), "ChatApp.UiTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(settingsDir);
+        var start = new System.Diagnostics.ProcessStartInfo(client) { UseShellExecute = false };
+        start.Environment["CHATAPP_SETTINGS_DIR"] = settingsDir;
+        using var app = Application.Launch(start);
         using var automation = new UIA3Automation();
         try
         {
@@ -50,7 +55,8 @@ public sealed class LoginScreenTests
         }
         finally
         {
-            app.Close();
+            try { app.Kill(); } catch (Exception) { }
+            try { Directory.Delete(settingsDir, recursive: true); } catch (Exception) { }
         }
     }
 }

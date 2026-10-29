@@ -12,11 +12,15 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <PackageReference Include="FlaUI.Core" Version="5.0.0" />
     <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+    <!-- 서버가 꺼져 있으면 실패 대신 "건너뜀"으로 표시 (Skip.If) -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.4.13" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ChatApp.Client\ChatApp.Client.csproj" />
+    <!-- 화면 밖에서 서버에 직접 붙는 "관찰자" 사용자를 만들 때 패킷·TLS 코드를 그대로 쓴다 -->
+    <ProjectReference Include="..\ChatApp.Common\ChatApp.Common.csproj" />
   </ItemGroup>
 </Project>

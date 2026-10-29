@@ -334,6 +334,10 @@ internal sealed class ChatWindow : Form
 
         // 대화
         _view.Dock = DockStyle.Fill;   // 머리와 입력 영역을 뺀 나머지 전부
+        // 화면 자동 테스트(UI Automation)가 찾는 이름 (AutomationId)
+        _view.Name = "ChatView";
+        _input.Name = "MessageInput";
+        _sendButton.Name = "SendButton";
 
         // [+] 버튼 → 카카오톡처럼 사진 / 동영상 / 파일을 따로 고르는 메뉴
         // [왜] 처음에는 📎 이모지를 썼는데 PC 글꼴에 따라 네모로 깨져 보여서, 어느 PC에서나 보이는 "+" 글자로 바꿨다.

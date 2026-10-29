@@ -50,6 +50,9 @@ public sealed class CreateRoomForm : Form
         BackColor = Color.White;
 
         var create = UiHelper.CreateButton("만들기", primary: true);
+        // 화면 자동 테스트(UI Automation)가 찾는 이름 (AutomationId)
+        _name.Name = "RoomName";
+        create.Name = "CreateRoomOk";
         var cancel = UiHelper.CreateButton("취소");
 
         // 화면 배치: [방 이름 | 입력칸] / [최대 인원 | 숫자] / [취소 만들기] / [오류 문구]

@@ -76,8 +76,12 @@ public sealed class ClientSettings
     //   - exe가 있는 폴더(Program Files 등)는 관리자 권한이 없으면 쓸 수 없는 경우가 많아서 이 폴더를 쓴다.
     //   - "Local"은 회사 도메인 환경에서 다른 PC로 따라다니지(로밍) 않는 폴더라는 뜻이다.
     // [왜] 속성(=>)으로 만든 이유: 경로를 쓸 때마다 계산하지만 비용이 거의 없고, 필드 초기화 순서를 신경 쓸 필요가 없다.
+    // [테스트] 환경 변수 CHATAPP_SETTINGS_DIR이 있으면 그 폴더의 client.json을 쓴다.
+    //        화면 자동 테스트(ChatApp.UiTests)가 사용자의 진짜 설정(서버 주소, 신뢰한 지문, 자동 로그인)을 건드리지 않게 하려고.
     private static string FilePath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChatApp", "client.json");
+        Environment.GetEnvironmentVariable("CHATAPP_SETTINGS_DIR") is { Length: > 0 } dir
+            ? Path.Combine(dir, "client.json")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ChatApp", "client.json");
 
     /// <summary>설정 파일을 읽는다. 없거나 깨져 있으면 기본값으로 시작한다(프로그램이 죽지 않게).</summary>
     public static ClientSettings Load()
