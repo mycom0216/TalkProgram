@@ -55,3 +55,6 @@ db/backup.cnf
 
 # 배포 결과물 (publish.bat)
 publish/
+
+# 임시 압축 파일
+*.tgz

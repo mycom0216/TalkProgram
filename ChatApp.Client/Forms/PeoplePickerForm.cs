@@ -45,6 +45,8 @@ public sealed class PeoplePickerForm : Form
     /// 남은 자리보다 많이 골랐을 때 물어볼 함수 (방장·관리자만 줌). 고른 인원을 받아 true면 그대로 진행한다(호출한 쪽이 정원을 늘린다).
     /// 없으면 남은 자리보다 많이 고르면 [초대]가 꺼진다.
     /// </summary>
+    // [왜] Form의 public 속성은 디자이너가 코드로 저장하려 해서 WFO1000 오류가 난다. 코드에서만 쓰는 속성이라 저장 대상에서 뺀다.
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public Func<int, bool>? ConfirmOverLimit { get; set; }
     private bool _received; // 서버에서 목록을 받았는지 (받기 전의 0명과 진짜 0명을 구분)
     private readonly string? _hint; // 한 명 고르기의 안내 문구 (없으면 1:1 안내)
