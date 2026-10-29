@@ -63,10 +63,12 @@ public sealed class CreateRoomRequest
     // [주의] 1000명이라 DB 컬럼 rooms.max_users를 SMALLINT(최대 65535)로 바꿨다. TINYINT(최대 255)면
     //   "Out of range value" DB 오류가 났었다.
     public const int MaxUsersLimit = 1000;
+    /// <summary>방을 만들 때 기본 정원 = 최대 정원. 작은 방이 필요하면 만들 때나 [방 정원 바꾸기]로 줄인다.</summary>
+    public const int DefaultMaxUsers = MaxUsersLimit;
     public const int MaxNameLength = 30;
 
     public string Name { get; set; } = "";
-    public int MaxUsers { get; set; } = 10;
+    public int MaxUsers { get; set; } = DefaultMaxUsers;
 
     /// <summary>true = 비공개 방 (초대한 사람만 들어올 수 있음).</summary>
     public bool IsPrivate { get; set; }

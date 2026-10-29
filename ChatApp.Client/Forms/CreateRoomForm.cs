@@ -22,7 +22,7 @@ public sealed class CreateRoomForm : Form
     {
         Minimum = CreateRoomRequest.MinUsers,
         Maximum = CreateRoomRequest.MaxUsersLimit,
-        Value = 10,
+        Value = CreateRoomRequest.DefaultMaxUsers,
     };
     // 비공개 방: 방 목록에 보이지 않고, 멤버가 초대한 사람만 들어올 수 있다 (팀 방, 프로젝트 방 등)
     private readonly CheckBox _private = new() { Text = "비공개 방 (초대한 사람만 참여, 목록에 안 보임)", AutoSize = true, Margin = new Padding(0, 4, 0, 0) };

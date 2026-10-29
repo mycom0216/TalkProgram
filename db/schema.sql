@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS rooms (
   room_id     INT AUTO_INCREMENT PRIMARY KEY,
   room_name   VARCHAR(50)      NOT NULL,
   owner_no    VARCHAR(20)      NULL,
-  max_users   SMALLINT UNSIGNED NOT NULL DEFAULT 10,       -- 최대 1000명 (TINYINT는 255까지라 부족)
+  max_users   SMALLINT UNSIGNED NOT NULL DEFAULT 1000,     -- 최대 1000명 (TINYINT는 255까지라 부족). 기본도 1000명
   is_private  TINYINT(1)       NOT NULL DEFAULT 0,          -- 1 = 비공개(초대로만 참여, 목록에 안 보임)
   closed_at   DATETIME         NULL,
   created_at  DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
