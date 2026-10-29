@@ -20,7 +20,8 @@ namespace ChatApp.Server.Services;
 public sealed record AdminOutcome(bool Success, string Message, string? TempPassword = null);
 
 public sealed class AdminService(UserRepository users, AuditRepository auditRepository, AuthService auth,
-                                 SessionManager sessions, AuditLog audit, ServerLogger log, Db? db = null)
+                                 SessionManager sessions, AuditLog audit, ServerLogger log, Db? db = null,
+                                 string? uploadRoot = null)
 {
     /// <summary>서버 콘솔에서 한 동작의 "행위자" 이름.</summary>
     public const string ConsoleActor = "CONSOLE";
@@ -56,14 +57,84 @@ public sealed class AdminService(UserRepository users, AuditRepository auditRepo
                    (SELECT COUNT(*) FROM files WHERE status = 'DONE'),
                    (SELECT COALESCE(SUM(file_size), 0) FROM files WHERE status = 'DONE')
             """;
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read()) throw new InvalidOperationException("관리 통계를 읽지 못했습니다.");
-        return new AdminStats
+        AdminStats stats;
+        using (var reader = cmd.ExecuteReader())
         {
-            ActiveUsers = Convert.ToInt32(reader.GetValue(0)), PendingUsers = Convert.ToInt32(reader.GetValue(1)), SuspendedUsers = Convert.ToInt32(reader.GetValue(2)),
-            OnlineUsers = sessions.GetUsers().Count, OpenRooms = Convert.ToInt32(reader.GetValue(3)), Messages = Convert.ToInt64(reader.GetValue(4)),
-            Files = Convert.ToInt64(reader.GetValue(5)), FileBytes = Convert.ToInt64(reader.GetValue(6)), CapturedAtUtc = DateTime.UtcNow,
-        };
+            if (!reader.Read()) throw new InvalidOperationException("관리 통계를 읽지 못했습니다.");
+            stats = new AdminStats
+            {
+                ActiveUsers = Convert.ToInt32(reader.GetValue(0)), PendingUsers = Convert.ToInt32(reader.GetValue(1)), SuspendedUsers = Convert.ToInt32(reader.GetValue(2)),
+                OnlineUsers = sessions.GetUsers().Count, OpenRooms = Convert.ToInt32(reader.GetValue(3)), Messages = Convert.ToInt64(reader.GetValue(4)),
+                Files = Convert.ToInt64(reader.GetValue(5)), FileBytes = Convert.ToInt64(reader.GetValue(6)), CapturedAtUtc = DateTime.UtcNow,
+            };
+        }
+
+        // [성능] 모두 sent_at / created_at 인덱스(idx_sent_at, idx_action)로 최근 7일만 훑는다. 접속 세션은 UTC(+00:00).
+        stats.MessageHours = ReadHours(conn, """
+            SELECT DATE_FORMAT(sent_at, '%Y-%m-%d %H:00:00') AS h, COUNT(*)
+            FROM messages WHERE sent_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY AND msg_type <> 'SYSTEM'
+            GROUP BY h
+            """);
+        stats.LoginHours = ReadHours(conn, $"""
+            SELECT DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') AS h, COUNT(DISTINCT actor_no)
+            FROM audit_logs WHERE action = '{AuditActions.LoginOk}' AND created_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY
+            GROUP BY h
+            """);
+
+        using (var top = conn.CreateCommand())
+        {
+            top.CommandText = """
+                SELECT r.room_id, r.room_name,
+                       (SELECT COUNT(*) FROM room_members rm WHERE rm.room_id = r.room_id) AS members,
+                       t.cnt
+                FROM (SELECT room_id, COUNT(*) AS cnt FROM messages
+                      WHERE room_id IS NOT NULL AND sent_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY AND msg_type <> 'SYSTEM'
+                      GROUP BY room_id ORDER BY cnt DESC LIMIT 5) t
+                JOIN rooms r ON r.room_id = t.room_id
+                ORDER BY t.cnt DESC
+                """;
+            using var r = top.ExecuteReader();
+            while (r.Read())
+                stats.TopRooms.Add(new RoomActivity
+                {
+                    RoomId = Convert.ToInt32(r.GetValue(0)), Name = r.GetString(1),
+                    Members = Convert.ToInt32(r.GetValue(2)), Messages = Convert.ToInt64(r.GetValue(3)),
+                });
+        }
+
+        // 파일 보관 폴더가 있는 디스크의 남은 공간
+        if (uploadRoot is not null)
+        {
+            try
+            {
+                string? root = Path.GetPathRoot(Path.GetFullPath(uploadRoot));
+                if (!string.IsNullOrEmpty(root))
+                {
+                    var drive = new DriveInfo(root);
+                    stats.DiskFreeBytes = drive.AvailableFreeSpace;
+                    stats.DiskTotalBytes = drive.TotalSize;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                log.Info($"[경고] 디스크 공간을 읽지 못했습니다: {ex.Message}");
+            }
+        }
+        return stats;
+    }
+
+    private static List<HourCount> ReadHours(System.Data.Common.DbConnection conn, string sql)
+    {
+        var list = new List<HourCount>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            DateTime hour = DateTime.ParseExact(r.GetString(0), "yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+            list.Add(new HourCount { HourUtc = DateTime.SpecifyKind(hour, DateTimeKind.Utc), Count = Convert.ToInt32(r.GetValue(1)) });
+        }
+        return list;
     }
 
     /// <summary>관리 동작 실행. actor = 관리자 사원번호 또는 ConsoleActor.</summary>

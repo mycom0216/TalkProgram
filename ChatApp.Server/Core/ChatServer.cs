@@ -71,7 +71,7 @@ public sealed class ChatServer
         _tls = tls;
         _config = config;
         var files = new FileService(Sessions, Rooms, fileRepository, config, log, audit, userRepository.FindActiveUser);
-        Admin = new AdminService(userRepository, auditRepository, auth, Sessions, audit, log, db);
+        Admin = new AdminService(userRepository, auditRepository, auth, Sessions, audit, log, db, config.UploadRoot);
         // [개념] files.ReadThumbnail처럼 "메서드 이름만" 넘기면 Func<string, byte[]?> 대리자(delegate)로 바뀐다.
         //        MessageStore는 FileService를 몰라도 "경로 → 미리보기 바이트" 함수만 받아서 쓸 수 있다.
         _messages = new MessageStore(messageRepository, files.ReadThumbnail, log); // DB 작업 스레드 시작

@@ -9,6 +9,7 @@ namespace ChatApp.Client.Forms;
 // [파일 요약] AdminForm.cs - 관리자 창 (관리자만 메인 창 메뉴에서 열 수 있음)
 // - [회원] 탭: 회원 목록(상태별 보기, 검색) + 승인/거절/정지/퇴사/사용 재개/잠금 해제/비밀번호 초기화/강제 로그아웃/관리자 지정·해제
 // - [감사 로그] 탭: 누가 언제 무엇을 했는지 검색 (사원번호·동작으로 거르기)
+// - [통계] 탭: 숫자 카드, 최근 7일 메시지·시간대별 로그인 그래프, 활발한 방 TOP 5, 디스크 사용량 (모두 내 PC 시간 기준)
 // - 스레드: 화면은 UI 스레드. 서버 응답(AdminUserList 등)은 수신 스레드에서 와서 RunOnUi로 넘긴다.
 // [주의] 메뉴를 관리자에게만 보여 주는 것은 "편의"다. 실제 권한 확인은 서버(PacketHandler.HandleAdmin)가 매번 한다.
 //        누가 클라이언트를 고쳐 이 창을 띄워도 서버가 거절하고 감사 로그에 남긴다.
@@ -32,7 +33,15 @@ public sealed class AdminForm : Form
     private readonly ComboBox _auditAction = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
     private readonly ComboBox _auditLimit = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 70 };
     private readonly ListView _audit = CreateList();
-    private readonly Label _statsSummary = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = UiHelper.BaseFont, Padding = new Padding(24), Text = "새로고침을 눌러 통계를 불러오세요." };
+    // 통계 탭: 숫자 카드 6개 + 그래프 2개 + 활발한 방 + 디스크
+    private readonly Label _statsTime = new() { AutoSize = true, ForeColor = UiHelper.Muted, Margin = new Padding(8, 9, 0, 0), Text = "통계를 불러오는 중..." };
+    private readonly StatCard _cardOnline = new() { Name = "StatOnline" }, _cardUsers = new() { Name = "StatUsers" },
+                              _cardRooms = new() { Name = "StatRooms" }, _cardToday = new() { Name = "StatToday" },
+                              _cardFiles = new() { Name = "StatFiles" }, _cardDisk = new() { Name = "StatDisk" };
+    private readonly BarChart _dailyChart = new() { Dock = DockStyle.Fill, Name = "DailyChart" };
+    private readonly BarChart _hourlyChart = new() { Dock = DockStyle.Fill, Name = "HourlyChart" };
+    private readonly UsageBar _diskBar = new() { Dock = DockStyle.Fill, Name = "DiskBar" };
+    private readonly ListView _topRooms = CreateList();
 
     private readonly Label _status = new() { Dock = DockStyle.Bottom, Height = 26, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0) };
 
@@ -71,14 +80,127 @@ public sealed class AdminForm : Form
 
     private TabPage BuildStatsTab()
     {
-        var page = new TabPage("통계") { BackColor = Color.White };
+        var page = new TabPage("통계") { BackColor = Theme.Background };
         var refresh = UiHelper.CreateButton("통계 새로고침");
         refresh.Click += (_, _) => RequestStats();
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8) };
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(8, 8, 8, 0) };
         bar.Controls.Add(refresh);
-        page.Controls.Add(_statsSummary);
+        bar.Controls.Add(_statsTime);
+
+        // ① 숫자 카드: 창이 좁으면 다음 줄로 넘어간다
+        var cards = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Padding = new Padding(6, 4, 6, 0) };
+        foreach (StatCard card in new[] { _cardOnline, _cardUsers, _cardRooms, _cardToday, _cardFiles, _cardDisk })
+        {
+            card.Size = LogicalToDeviceUnits(new Size(150, 88));
+            cards.Controls.Add(card);
+        }
+
+        // ② 그래프 2개 (위) + 활발한 방·디스크 (아래)
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2, Padding = new Padding(6) };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
+        grid.Controls.Add(_dailyChart, 0, 0);
+        grid.Controls.Add(_hourlyChart, 1, 0);
+
+        _topRooms.Name = "TopRooms";
+        _topRooms.GridLines = false;
+        _topRooms.Columns.Add("순위", LogicalToDeviceUnits(44), HorizontalAlignment.Center);
+        _topRooms.Columns.Add("활발한 방 (최근 7일)", LogicalToDeviceUnits(200));
+        _topRooms.Columns.Add("멤버", LogicalToDeviceUnits(60), HorizontalAlignment.Right);
+        _topRooms.Columns.Add("메시지", LogicalToDeviceUnits(80), HorizontalAlignment.Right);
+        var roomsBox = new Panel { Dock = DockStyle.Fill, Margin = new Padding(6), Padding = new Padding(1), BackColor = Theme.Border };
+        roomsBox.Controls.Add(_topRooms);
+        grid.Controls.Add(roomsBox, 0, 1);
+        grid.Controls.Add(_diskBar, 1, 1);
+
+        _dailyChart.SetData("최근 7일 메시지", [], [], emptyText: "불러오는 중...");
+        _hourlyChart.SetData("시간대별 로그인 (최근 7일)", [], [], emptyText: "불러오는 중...");
+
+        page.Controls.Add(grid);  // [개념] Dock은 나중에 넣은 컨트롤부터 자리를 잡는다 → bar, cards가 위, grid가 나머지
+        page.Controls.Add(cards);
         page.Controls.Add(bar);
         return page;
+    }
+
+    /// <summary>서버 시각(UTC)을 내 PC 시간으로. JSON에서 Kind가 빠져 와도 UTC로 본다.</summary>
+    private static DateTime ToLocal(DateTime time) =>
+        time.Kind == DateTimeKind.Local ? time : DateTime.SpecifyKind(time, DateTimeKind.Utc).ToLocalTime();
+
+    /// <summary>받은 통계를 카드·그래프로 그린다. 시간별(UTC) 자료를 내 PC 시간대 기준 날짜·시간으로 묶는다.</summary>
+    private void ShowStats(AdminStats s)
+    {
+        DateTime today = DateTime.Now.Date;
+        DateTime firstDay = today.AddDays(-6);
+
+        // 최근 7일 메시지 (날짜별)
+        string[] dayLabels = new string[7];
+        int[] dayValues = new int[7];
+        for (int i = 0; i < 7; i++)
+        {
+            DateTime day = firstDay.AddDays(i);
+            dayLabels[i] = i == 6 ? "오늘" : $"{day:M/d}({"일월화수목금토"[(int)day.DayOfWeek]})";
+        }
+        foreach (HourCount h in s.MessageHours)
+        {
+            int index = (ToLocal(h.HourUtc).Date - firstDay).Days;
+            if (index is >= 0 and < 7) dayValues[index] += h.Count;
+        }
+
+        // 시간대별 로그인 (7일 동안 그 시간에 로그인한 사람 수의 합)
+        string[] hourLabels = Enumerable.Range(0, 24).Select(h => $"{h}시").ToArray();
+        int[] hourValues = new int[24];
+        foreach (HourCount h in s.LoginHours)
+        {
+            DateTime local = ToLocal(h.HourUtc);
+            if (local.Date >= firstDay) hourValues[local.Hour] += h.Count;
+        }
+
+        _statsTime.Text = $"기준 시각 {ToLocal(s.CapturedAtUtc):yyyy-MM-dd HH:mm:ss} (내 PC 시간)";
+        _dailyChart.SetData("최근 7일 메시지", dayLabels, dayValues, highlight: 6, emptyText: "최근 7일 동안 메시지가 없습니다.");
+        _hourlyChart.SetData("시간대별 로그인 (최근 7일)", hourLabels, hourValues, highlight: DateTime.Now.Hour,
+                             emptyText: "최근 7일 동안 로그인 기록이 없습니다.");
+
+        _cardOnline.SetValue("접속 중", $"{s.OnlineUsers:N0}명", $"사용 계정 {s.ActiveUsers:N0}명 중", Theme.Online);
+        _cardUsers.SetValue("사용 계정", $"{s.ActiveUsers:N0}명", $"승인 대기 {s.PendingUsers:N0} · 정지 {s.SuspendedUsers:N0}",
+                            s.PendingUsers > 0 ? Theme.Notice : Theme.Primary);
+        _cardRooms.SetValue("열린 방", $"{s.OpenRooms:N0}개", s.TopRooms.Count > 0 ? $"1위 {s.TopRooms[0].Name}" : "최근 7일 대화 없음");
+        _cardToday.SetValue("오늘 메시지", $"{dayValues[6]:N0}건", $"7일 {dayValues.Sum():N0} · 전체 {s.Messages:N0}");
+        _cardFiles.SetValue("보관 파일", $"{s.Files:N0}개", FileRules.FormatSize(s.FileBytes));
+
+        // 디스크 (파일 보관 폴더가 있는 드라이브)
+        if (s.DiskTotalBytes > 0)
+        {
+            double used = 1 - s.DiskFreeBytes / (double)s.DiskTotalBytes;
+            double freeRatio = s.DiskFreeBytes / (double)s.DiskTotalBytes;
+            Color accent = freeRatio < 0.1 ? Theme.Danger : freeRatio < 0.2 ? Theme.Notice : Theme.Primary;
+            _cardDisk.SetValue("남은 디스크", FileRules.FormatSize(s.DiskFreeBytes), $"전체 {FileRules.FormatSize(s.DiskTotalBytes)}", accent);
+            _diskBar.SetData("파일 보관 디스크 사용량", used, s.FileBytes / (double)s.DiskTotalBytes,
+                $"남은 공간 {FileRules.FormatSize(s.DiskFreeBytes)} / 전체 {FileRules.FormatSize(s.DiskTotalBytes)}\n" +
+                $"진한 부분 = 사내톡 파일 {FileRules.FormatSize(s.FileBytes)}" +
+                (freeRatio < 0.1 ? "\n⚠ 공간이 10% 미만입니다. 오래된 파일 정리(보관 기간)나 디스크 증설을 검토하세요." : ""));
+        }
+        else
+        {
+            _cardDisk.SetValue("남은 디스크", "-", "읽지 못함", Theme.Offline);
+            _diskBar.SetData("파일 보관 디스크 사용량", 0, 0, "서버가 디스크 정보를 읽지 못했습니다.");
+        }
+
+        // 활발한 방 TOP 5
+        _topRooms.BeginUpdate();
+        _topRooms.Items.Clear();
+        int rank = 1;
+        foreach (RoomActivity room in s.TopRooms)
+        {
+            var row = new ListViewItem((rank++).ToString()) { Tag = room };
+            row.SubItems.Add(room.Name);
+            row.SubItems.Add(room.Members > 0 ? $"{room.Members:N0}명" : "전체"); // 기본 방(전체 채팅)은 멤버 행 없이 모두가 들어간다
+            row.SubItems.Add($"{room.Messages:N0}");
+            _topRooms.Items.Add(row);
+        }
+        if (s.TopRooms.Count == 0) _topRooms.Items.Add(new ListViewItem(["", "최근 7일 동안 대화한 방이 없습니다.", "", ""]) { ForeColor = UiHelper.Muted });
+        _topRooms.EndUpdate();
     }
 
     private void RequestStats()
@@ -314,10 +436,8 @@ public sealed class AdminForm : Form
             case PacketType.AdminStats:
                 if (packet.GetData<AdminStats>() is { } stats)
                 {
-                    _statsSummary.Text = $"기준 시각(UTC): {stats.CapturedAtUtc:yyyy-MM-dd HH:mm:ss}\n\n" +
-                        $"접속 중: {stats.OnlineUsers:N0}명\n사용 계정: {stats.ActiveUsers:N0}명 · 승인 대기: {stats.PendingUsers:N0}명 · 정지: {stats.SuspendedUsers:N0}명\n\n" +
-                        $"열린 방: {stats.OpenRooms:N0}개\n메시지: {stats.Messages:N0}개\n파일: {stats.Files:N0}개 · {FileRules.FormatSize(stats.FileBytes)}";
-                    ShowStatus("관리 통계를 갱신했습니다.", error: false);
+                    ShowStats(stats);
+                    ShowStatus($"관리 통계를 갱신했습니다. ({DateTime.Now:HH:mm:ss})", error: false);
                 }
                 break;
 

@@ -123,6 +123,36 @@ public sealed class AdminStats
     public long Files { get; set; }
     public long FileBytes { get; set; }
     public DateTime CapturedAtUtc { get; set; }
+
+    // ── 그래프용 (최근 7일). 시각은 모두 UTC "정시" — 화면에서 내 PC 시간대로 바꿔 날짜·시간대별로 묶는다.
+    // [왜] 서버가 "날짜별"로 묶어 보내면 서버의 날짜 기준(UTC)으로 잘려서, 한국에서는 오전 9시에 날이 바뀐 것처럼 보인다.
+    //      시간 단위로 받아서 클라이언트가 자기 시간대로 묶으면 어느 지역에서 봐도 맞다.
+    /// <summary>시간별 메시지 수 (방 + 1:1, 삭제 포함).</summary>
+    public List<HourCount> MessageHours { get; set; } = [];
+    /// <summary>시간별 로그인한 사람 수 (같은 사람이 여러 번 로그인해도 1명).</summary>
+    public List<HourCount> LoginHours { get; set; } = [];
+    /// <summary>최근 7일 메시지가 많은 방 (최대 5개).</summary>
+    public List<RoomActivity> TopRooms { get; set; } = [];
+
+    // ── 저장 공간 (파일 보관 폴더가 있는 디스크)
+    public long DiskFreeBytes { get; set; }
+    public long DiskTotalBytes { get; set; }
+}
+
+/// <summary>한 시간 동안의 개수. HourUtc = 그 시간의 시작(UTC).</summary>
+public sealed class HourCount
+{
+    public DateTime HourUtc { get; set; }
+    public int Count { get; set; }
+}
+
+/// <summary>활발한 방 (관리 통계).</summary>
+public sealed class RoomActivity
+{
+    public int RoomId { get; set; }
+    public string Name { get; set; } = "";
+    public int Members { get; set; }
+    public long Messages { get; set; }
 }
 
 /// <summary>감사 로그에 남기는 동작 이름 (DB audit_logs.action, 최대 30자).</summary>
