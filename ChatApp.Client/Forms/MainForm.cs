@@ -645,6 +645,20 @@ public sealed class MainForm : Form
                 if (!string.IsNullOrEmpty(packet.Body)) SetStatus($"● {packet.Body}", Theme.SubText);
                 break;
 
+            case PacketType.ProfileRes:
+                if (!packet.Success)
+                {
+                    SetStatus($"● {packet.Body}", Theme.SubText);
+                    break;
+                }
+                if (packet.GetData<UserInfo>() is { } profile)
+                {
+                    _knownPeers[profile.EmployeeNo] = profile;
+                    _avatars.Note(profile);
+                    RefreshProfileCard();
+                }
+                break;
+
             case PacketType.FriendSearchRes:
             case PacketType.PhoneInfo:
                 break; // 친구 추가 창·휴대폰 번호 창이 직접 받는다
@@ -2176,10 +2190,12 @@ public sealed class MainForm : Form
             ShowProfile(_me);
             return;
         }
-        UserInfo? user = _users.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo))
-                         ?? _friends.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo))
-                         ?? (_knownPeers.TryGetValue(employeeNo, out UserInfo? known) ? known : null);
-        if (user is not null) ShowProfile(user);
+        // [왜] 접속하지 않은 사람은 접속자·친구 목록에 없을 수 있다. 우선 아는 만큼(사원번호) 카드를 열고,
+        //      ShowProfile이 서버에 최신 정보를 물어 채운다(ProfileReq → ProfileRes).
+        UserInfo user = _users.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo))
+                        ?? _friends.FirstOrDefault(u => SameNo(u.EmployeeNo, employeeNo))
+                        ?? KnownPeer(employeeNo, employeeNo);
+        ShowProfile(user);
     }
 
     /// <summary>프로필 카드 열기 (한 번에 하나만).</summary>
@@ -2192,6 +2208,8 @@ public sealed class MainForm : Form
         _profileCard.ActionRequested += OnProfileAction;
         _profileCard.FormClosed += (sender, _) => { if (ReferenceEquals(sender, _profileCard)) _profileCard = null; };
         _profileCard.Show(this);
+        // 다른 사람이면 최신 상태 메시지·사진 버전을 서버에 묻는다 (접속하지 않은 사람도 볼 수 있게)
+        if (!isMe) _client.Send(Packet.Create(PacketType.ProfileReq, body: user.EmployeeNo));
     }
 
     /// <summary>그 사람의 최신 정보와 접속 여부 (접속자 목록 → 친구 목록 → 알고 있던 정보 순).</summary>
@@ -2206,7 +2224,8 @@ public sealed class MainForm : Form
     private void RefreshProfileCard()
     {
         if (_profileCard is not { IsDisposed: false } card) return;
-        (UserInfo user, bool online) = ProfileState(card.EmployeeNo, new UserInfo { EmployeeNo = card.EmployeeNo });
+        UserInfo fallback = _knownPeers.TryGetValue(card.EmployeeNo, out UserInfo? known) ? known : new UserInfo { EmployeeNo = card.EmployeeNo };
+        (UserInfo user, bool online) = ProfileState(card.EmployeeNo, fallback);
         if (user.Name.Length == 0) return; // 정보를 모르면 그대로 둔다
         card.UpdateUser(user, !SameNo(card.EmployeeNo, _me.EmployeeNo) && IsFriend(card.EmployeeNo), online);
     }

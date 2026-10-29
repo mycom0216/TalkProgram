@@ -143,4 +143,6 @@ public enum PacketType
     ProfilePhotoUpdate, // 내 사진 바꾸기 (Data = PhotoInfo{Kind}: 프로필 160×160 / 배경 720×960, Bin 비어 있으면 지우기)
     ProfilePhotoReq,    // 다른 사람 사진 받기 (Body = 사원번호, Data = PhotoInfo{Kind})
     ProfilePhoto,       // 사진 (Target = 사원번호, Data = PhotoInfo{Kind, Version}, Bin = 사진 / 실패하면 Success=false + Body)
+    ProfileReq,         // 한 사람의 프로필 정보 요청 (Body = 사원번호) — 접속하지 않은 사람의 프로필 카드를 열 때
+    ProfileRes,         // 프로필 정보 (Target = 사원번호, Data = UserInfo / 없는 계정이면 Success=false + Body)
 }

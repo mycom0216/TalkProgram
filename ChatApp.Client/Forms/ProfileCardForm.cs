@@ -134,6 +134,7 @@ internal sealed class ProfileCardForm : Form
         _user = user;
         _isFriend = isFriend;
         _online = online;
+        if (!_isMe) Text = $"{user.DisplayName} 프로필"; // 처음엔 사원번호만 알다가 서버 응답으로 이름이 채워질 수 있다
         _avatars.NoteBackground(user);
         UpdateButtons();
         Invalidate();

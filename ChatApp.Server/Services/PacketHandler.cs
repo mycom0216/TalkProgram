@@ -122,6 +122,7 @@ public sealed class PacketHandler
                 // 프로필 사진
                 case PacketType.ProfilePhotoUpdate: _profileService.HandleUpdate(session, packet); break;
                 case PacketType.ProfilePhotoReq: _profileService.HandleRequest(session, packet); break;
+                case PacketType.ProfileReq: _friendService.HandleProfile(session, packet); break;
 
                 // 파일
                 case PacketType.FileUploadReq: _files.HandleUploadRequest(session, packet); break;

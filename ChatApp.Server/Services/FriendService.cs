@@ -105,6 +105,25 @@ public sealed class FriendService(SessionManager sessions, UserRepository users,
         SendList(session, "친구 목록에서 뺐습니다.");
     }
 
+    /// <summary>
+    /// 한 사람의 프로필 (프로필 카드용). 접속 중이면 지금 상태 그대로, 아니면 DB에서 읽고 상태 메시지를 붙인다.
+    /// [주의] 휴대폰 번호 같은 개인정보는 넣지 않는다 (UserInfo에는 원래 없다).
+    /// </summary>
+    public void HandleProfile(ClientSession session, Packet packet)
+    {
+        string no = packet.Body?.Trim() ?? "";
+        if (no.Length is 0 or > 20) return;
+        UserInfo? user = sessions.FindByEmployeeNo(no)?.User;
+        if (user is null && users.FindActiveUser(no) is { } found)
+        {
+            found.StatusMessage = users.TryLoadStatusMessage(found.EmployeeNo) ?? "";
+            user = found;
+        }
+        session.Send(user is null
+            ? Packet.Create(PacketType.ProfileRes, "사용하지 않는 계정이라 프로필을 볼 수 없습니다.", target: no, success: false)
+            : Packet.Create(PacketType.ProfileRes, target: no).WithData(user));
+    }
+
     /// <summary>내 휴대폰 번호 알려 주기 (본인에게만).</summary>
     public void HandlePhoneInfo(ClientSession session)
     {
