@@ -7,6 +7,45 @@
 // 연결  : CardListView, BubbleChatView, GradientPanel, MainForm, ChatWindow, LoginForm 등 거의 모든 화면이 사용.
 // [왜] 색을 화면마다 따로 적으면 테마를 바꿀 때 수십 군데를 고쳐야 한다. 한곳에 모으면 여기만 바꾸면 된다.
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   "사내톡"의 색·글꼴과 공통 그리기 함수를 한곳에 모은 정적 클래스. 대부분의 화면(CardListView, BubbleChatView, ToastForm, ProfileCardForm …)이 색을 직접 적지 않고 Theme.Primary, Theme.Border처럼 이름으로 가져다 쓴다 → 테마를 바꿀 때 이 파일만 고치면 된다.
+//
+// ■ 구성 (위에서 아래로)
+//   ① 색(Primary, Background, Online, Danger …) ② 글꼴(Body, BodyBold, Small, Title, Big) ③ AvatarColor(사원번호 → 항상 같은 색)
+//   ④ 그리기 도구: FillGradient(그라데이션), RoundedRect/FillRounded/DrawRounded(둥근 사각형), DrawAvatar(사진 또는 이니셜 원), DrawStatusDot(접속 상태 점), DrawLogo(로고)
+//   ⑤ 접속 상태 → 색/글자(PresenceColor, PresenceText)
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 디자인 토큰(색·글꼴을 이름으로 한곳에서 관리) ...... "design tokens central theme class"
+//   - 해시로 항상 같은 색 고르기 / string.GetHashCode 주의 .. "deterministic hash color avatar GetHashCode randomized"
+//   - 정수 오버플로와 unchecked ......................... "C# unchecked overflow hash computation"
+//   - GraphicsPath, AddArc로 둥근 사각형 ................. "GDI+ GraphicsPath AddArc rounded rectangle"
+//   - 안티앨리어싱(SmoothingMode.AntiAlias) .............. "GDI+ SmoothingMode AntiAlias"
+//   - 코드로 그린 로고(벡터) vs 이미지 파일 ................ "draw logo in code vs image resource DPI"
+//   - 전역 델리게이트로 느슨하게 연결(PhotoLookup) ......... "static callback decouple drawing from data source"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 사람마다 아바타 색이 늘 같은 방법은요? string.GetHashCode를 안 쓴 이유는요?
+//       A. 사원번호 문자를 "hash = hash × 31 + 글자"로 직접 계산해 8가지 색 중 나머지(%)로 고릅니다. .NET의 string.GetHashCode는 프로그램을 켤 때마다 무작위 시드로 값이 달라지므로, 쓰면 같은 사람이 실행마다 다른 색이 됩니다. 직접 계산하면 모든 PC에서 같은 색입니다.
+//   Q2. 색과 글꼴을 한 클래스에 모은 이유와, 글꼴을 Dispose하지 않는 이유는요?
+//       A. 화면마다 색을 따로 적으면 테마를 바꿀 때 수십 군데를 고쳐야 합니다. 글꼴은 GDI 자원이지만 프로그램이 끝날 때까지 모두가 공유해서 쓰므로 일부러 Dispose하지 않습니다(창이 닫힐 때 해제하면 다른 창이 깨집니다). 반대로 그릴 때마다 만드는 Brush/Pen/Path는 using으로 바로 해제합니다.
+//   Q3. 로고를 이미지 파일이 아니라 코드로 그린 이유는요?
+//       A. 어떤 화면 배율(DPI)에서도 선명하고 별도 리소스 파일이 필요 없으며, 다른 회사 로고를 쓰지 않고 이 프로젝트 고유의 모양을 만들 수 있습니다.
+//   Q4. FillGradient에서 폭·높이가 0이면 그냥 return하는 이유는요?
+//       A. 크기가 0인 사각형으로 LinearGradientBrush를 만들면 예외가 납니다. 창을 최소화했을 때 같은 순간에 그리기가 불려도 앱이 죽지 않게 하는 방어입니다.
+//   Q5. DrawAvatar는 사진을 어떻게 가져오나요?
+//       A. Theme.PhotoLookup(사원번호 → 사진을 돌려주는 함수)을 MainForm이 로그인 뒤 AvatarCache.Get으로 연결해 둡니다. 그리는 곳(목록, 말풍선, 대화창 머리, 알림)이 많아서 각각에 사진 보관함을 넘기는 대신 한 곳에 연결해 두는 방식입니다. 사진이 없으면 이니셜 원으로 그립니다.
+//
+// ■ 알아 둘 점 (코드는 바꾸지 않음)
+//   - PhotoLookup은 전역(static) 값이다. MainForm이 만들 때 설정하지만(코드로 확인함) 로그아웃해서 MainForm이 닫혀도 해제하는 곳이 없어, 다음 로그인에서 새 값으로 덮어쓸 때까지 이전 AvatarCache를 붙잡고 있다. 여러 계정을 번갈아 쓰는 경우를 생각하면 로그아웃 때 null로 돌려놓는 편이 깔끔하다.
+//   - DrawAvatar 위의 "사진 프로필 기능이 아직 없으므로…" 주석은 옛 설명이다(지금은 프로필·배경 사진이 있다). 짝 없는 /// <summary>도 한 줄 남아 있어 문서 주석이 어긋나 있다(동작에는 영향 없음).
+//   - 같은 맑은 고딕 10pt 글꼴이 Theme.Body와 UiHelper.BaseFont 두 곳에 따로 있다. 한 곳으로 합치면 폰트 정책을 바꾸기 쉽다.
+//   - 색 값(예: Danger, Notice)이 UiHelper에도 같은 값으로 다시 적혀 있다(UiHelper.Danger = Theme.Danger와 같은 220,38,38).
+// ───────────────────────────────────────────────────────────────────────────
 using System.Drawing.Drawing2D;
 using ChatApp.Common.Models;
 
@@ -67,6 +106,7 @@ internal static class Theme
     // [주의] .NET의 string.GetHashCode()는 보안상 프로그램을 켤 때마다 결과가 달라지므로(무작위 시드) 쓰면 안 된다.
     //        그래서 "hash = hash * 31 + 글자" 방식(자바 String.hashCode와 같은 공식)을 직접 계산한다.
     // [개념] unchecked: 곱셈이 uint 범위를 넘쳐도 예외를 내지 말고 그냥 넘쳐서(오버플로) 돌게 하라는 뜻.
+    // [읽는 법] 17에서 시작해 글자마다 hash×31+글자. uint라 음수가 없고 unchecked라 넘쳐도 예외 없이 돌아서 계속 계산된다. 마지막에 팔레트 길이(8)로 나눈 나머지가 색 번호.
     public static Color AvatarColor(string key)
     {
         uint hash = 17;
@@ -88,6 +128,7 @@ internal static class Theme
     /// [개념] GraphicsPath: 선·호(arc)를 이어 붙여 만든 "모양". 채우기(FillPath), 테두리(DrawPath), 잘라내기(SetClip)에 쓴다.
     /// 네 모서리에 1/4 원(90도 호)을 하나씩 붙여 둥근 사각형을 만든다.
     /// </summary>
+    // [주의] 이 함수는 새 GraphicsPath를 만들어 "돌려준다" → 받은 쪽이 using으로 Dispose해야 한다(아래 FillRounded/DrawRounded가 그렇게 한다). 반환한 객체를 해제하지 않으면 GDI+ 자원이 샌다.
     public static GraphicsPath RoundedRect(RectangleF r, float radius)
     {
         // d = 모서리 원의 지름. [주의] 사각형보다 큰 원을 그리면 모양이 깨지므로 너비·높이 중 작은 값을 넘지 않게,
@@ -126,9 +167,11 @@ internal static class Theme
     /// 프로필 사진 찾기 (사원번호 → 사진, 없으면 null). 메인 창이 로그인 뒤 AvatarCache.Get으로 채운다.
     /// [왜] 아바타를 그리는 곳(목록·말풍선·대화창 머리·알림 창)이 여러 군데라, 각각에 사진 보관함을 넘기는 대신 한곳에서 찾게 한다.
     /// </summary>
+    // [개념] 함수를 담는 전역 변수. "사원번호를 주면 사진을 돌려주는 방법"을 MainForm이 나중에 끼워 넣는다. null이면(로그인 전 등) 이니셜 원으로 그린다. 값을 읽을 때 ?.Invoke로 null을 안전하게 처리한다.
     public static Func<string, Image?>? PhotoLookup;
 
     /// <summary>아바타: 프로필 사진이 있으면 동그랗게 자른 사진, 없으면 이니셜 원.</summary>
+    // [읽는 법] 오버로드 2개: 사진 키가 있는 버전(이 함수)과 이니셜만 그리는 버전(아래). 사진이 없으면 아래 버전으로 넘긴다. 사진은 동그란 클립(SetClip)으로 자르고 가장자리에 옅은 테두리를 그린다.
     public static void DrawAvatar(Graphics g, Rectangle r, string name, Color color, string? photoKey)
     {
         Image? photo = photoKey is { Length: > 0 } ? PhotoLookup?.Invoke(photoKey) : null;
@@ -191,6 +234,7 @@ internal static class Theme
     public static readonly Color SearchHit = Color.FromArgb(253, 230, 138);   // 검색 결과 강조
 
     /// <summary>색을 직접 정하는 상태 점 (흰 테두리 + 색).</summary>
+    // [읽는 법] "흰 큰 원 → 색 작은 원" 두 번 칠해 흰 테두리를 만든다. 테두리 두께는 지름의 1/5(Inflate에 음수 = 안쪽으로 줄이기).
     public static void DrawStatusDot(Graphics g, Rectangle r, Color color)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -205,6 +249,7 @@ internal static class Theme
     /// <summary>사내톡 로고: 흰 말풍선 안에 파란 점 세 개(입력 중…).</summary>
     // [왜] 로고를 이미지 파일 대신 코드로 그리면 어떤 화면 배율에서도 선명하고, 별도 리소스 파일이 필요 없다.
     //      또한 다른 회사 로고를 쓰지 않고 이 프로젝트 고유의 모양을 만든다.
+    // [읽는 법] 그리는 순서: 그림자 → 흰 말풍선 몸통 → 꼬리 삼각형 → 파란 점 3개. Rectangle은 struct(값 형식)라 sb.Offset은 복사본만 움직여서 원래 bubble 좌표는 안전하다.
     public static void DrawLogo(Graphics g, Rectangle r)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;

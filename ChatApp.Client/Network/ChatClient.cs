@@ -21,6 +21,63 @@ namespace ChatApp.Client.Network;
 // [왜] 화면(Form)과 통신을 분리했다: 통신 코드가 WinForms를 모르므로 콘솔이나 테스트에서도 그대로 쓸 수 있고,
 //      창이 바뀌어도(로그인 창 → 메인 창) 연결은 하나로 유지된다.
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   서버와의 TCP+TLS 연결 하나를 맡고, 스레드 4개(수신·송신·하트비트 + 호출하는 UI 스레드)를 조율하는 통신 클래스. 화면은 전혀 모른다.
+//
+// ■ 스레드 지도 (이 파일의 핵심)
+//   UI 스레드 ........ ConnectAsync / Disconnect / ReleaseHeld 호출, 이벤트를 BeginInvoke로 받아 화면 갱신
+//   Receive 스레드 ... ReadPacket에서 블로킹 → Dispatch → PacketReceived 이벤트
+//   Send 스레드 ...... 큐에서 꺼내 WritePacket (소켓에 쓰는 스레드는 오직 이 하나 → 쓰기용 lock 불필요)
+//   Heartbeat 스레드 . 15초마다 Ping, 45초 동안 아무것도 못 받으면 Close
+//   ※ 정정: Disconnected 이벤트는 "먼저 Close를 부른 스레드"에서 발생한다. 수신 스레드뿐 아니라 송신·하트비트 스레드일 수도 있다(그래서 구독자는 어느 스레드에서든 BeginInvoke로 넘겨야 한다).
+//
+// ■ 읽는 순서
+//   ① 필드(큐 2개, _generation, _closed, _held) → ② ConnectAsync(연결→TLS→스레드 3개 시작) → ③ ReceiveLoop·Dispatch·ReleaseHeld(받기)
+//   → ④ Send·SendBulk·SendLoop(보내기) → ⑤ HeartbeatLoop → ⑥ Disconnect(내가 끊기)·Close(끊기 공통 출구)
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 생산자-소비자 큐 + Monitor.Wait/PulseAll ........ "producer consumer Monitor.Wait PulseAll"
+//   - 배압(backpressure): 큐가 차면 생산자를 기다리게 함 .. "backpressure bounded queue"
+//   - 원자적 연산(Interlocked), volatile ................ "Interlocked.Exchange volatile memory visibility"
+//   - 경쟁 상태 / 데드락 ................................ "race condition deadlock lock ordering"
+//   - 세대 번호(generation)로 옛 스레드 무력화 .......... "stale thread generation counter reconnect"
+//   - TLS 핸드셰이크, 인증서 고정(pinning) ............. "TLS handshake certificate pinning SslStream"
+//   - Nagle 알고리즘(NoDelay), TCP 메시지 경계 없음 ..... "Nagle TCP_NODELAY length-prefixed framing"
+//   - 하트비트(Ping/Pong)와 반쯤 열린 연결 .............. "heartbeat half-open connection detection"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 왜 수신용 스레드를 따로 만들었나요? async/await로 하면 안 되나요?
+//       A. NetworkHelper.ReadPacket이 동기(블로킹) 방식이라 UI 스레드에서 부르면 창이 멈춥니다. 읽기 전용 스레드를 두고 이벤트로 알리는 단순한 구조를 택했습니다. 연결 같은 일회성 작업만 async로 했습니다. 연결 수가 많은 서버라면 스레드 대신 비동기 I/O가 맞지만, 클라이언트는 연결이 하나라 스레드 하나로 충분합니다.
+//   Q2. Send를 부른 스레드가 직접 소켓에 쓰지 않고 큐를 거치는 이유는요?
+//       A. 예전에는 lock을 잡고 직접 썼는데, 큰 파일을 올리는 동안 UI 스레드의 채팅 한 줄이 그 lock을 기다려 창이 멈췄습니다. 지금은 큐에 넣고 바로 돌아오고, 실제 쓰기는 송신 스레드 하나만 합니다. 일반 큐를 항상 먼저 비우므로 파일 업로드 중에도 채팅이 바로 나갑니다.
+//   Q3. 대량 큐 상한(16)이 있는 이유는요? (배압)
+//       A. 파일 조각(256KB 단위)을 디스크에서 읽는 속도가 네트워크 전송보다 빠르면 메모리에 조각이 무한정 쌓입니다. 큐가 차면 SendBulk가 기다리게 해서 "보내는 속도에 맞춰 읽게" 만듭니다. 최대 약 4MB(16 × 256KB)만 메모리에 둡니다.
+//   Q4. 로그인 직후 패킷을 보관(_holding)했다가 ReleaseHeld로 푸는 이유는요?
+//       A. 서버는 로그인에 성공하면 곧바로 방 입장 결과·접속자·방 목록을 보내는데, 그 순간에는 메인 창이 아직 없어 구독자가 없습니다. 그대로면 패킷이 버려집니다. 그래서 LoginRes 성공 때 보관을 켜고 메인 창이 구독을 마친 뒤 순서대로 풀어 줍니다. 켜는 시점이 "LoginRes를 핸들러에 알리기 전"이어야 한다는 점이 실제로 겪은 경쟁 상태였습니다.
+//   Q5. ReleaseHeld에서는 lock 안에서 이벤트를 부르는데, 위험하지 않나요?
+//       A. 위험합니다. 그래서 규칙을 둡니다: 구독자는 Invoke(동기) 대신 BeginInvoke만 쓴다. UI 스레드가 이 lock을 잡은 채 Invoke로 UI를 기다리면 서로 영원히 기다리는 데드락이 됩니다. 반대로 순서를 지키려면 lock 안에서 부를 수밖에 없었습니다(보관된 패킷이 새 패킷에 앞서야 함). 이 트레이드오프를 알고 선택했다고 답하면 좋습니다.
+//   Q6. 세대 번호(_generation)는 왜 필요한가요?
+//       A. 재접속하면 옛 연결의 수신·송신 스레드가 늦게 깨어날 수 있습니다. 그 스레드가 새 연결의 큐를 가져가거나 새 연결을 Close해 버리면 안 되므로, 각 스레드가 시작 때의 세대 번호를 들고 있다가 현재와 다르면 스스로 끝납니다.
+//   Q7. Close가 여러 스레드에서 동시에 불려도 한 번만 실행되는 이유는요?
+//       A. Interlocked.Exchange(ref _closed, 1)가 "1로 바꾸고 이전 값을 돌려주는" 원자적 연산이라, 이전 값이 이미 1이면 다른 스레드가 먼저 닫은 것이므로 바로 반환합니다. if (_closed == 1) return; _closed = 1; 두 줄로 쓰면 두 스레드가 동시에 통과할 수 있습니다.
+//   Q8. 하트비트는 왜 필요한가요? TCP가 끊김을 알려 주지 않나요?
+//       A. 케이블을 뽑거나 공유기가 죽는 "반쯤 열린 연결"에서는 OS가 끊김을 몇 분 동안 모를 수 있습니다. 15초마다 Ping을 보내고 45초 동안 아무것도 못 받으면 끊김으로 처리해 빨리 재접속합니다. 서버도 같은 원리로 클라이언트를 감시합니다.
+//   Q9. TLS는 어떻게 안전하게 쓰나요? 사내 자체 서명 인증서는요?
+//       A. 처음 접속 때 인증서 지문(SHA-256)을 사용자에게 보여 주고 신뢰하면 저장해 두며(LoginForm), 이후에는 그 지문과 같은 인증서만 받습니다(인증서 고정). 자동 재접속도 같은 지문을 쓰므로 그 사이 가짜 서버로 바꿔치기돼도 연결되지 않습니다. 첫 접속 때 지문을 눈으로 확인하는 일은 사용자에게 달려 있다는 한계가 있습니다.
+//   Q10. 한계는요? (솔직하게 답하기)
+//       A. (1) Disconnect가 로그아웃 패킷이 나갈 때까지 UI 스레드를 최대 1.5초 붙잡는다. (2) 재접속용으로 비밀번호를 메모리에 들고 있다(파일에는 저장하지 않지만 메모리 덤프에는 남음) — 토큰 로그인(LastTokenLogin)으로 대체해 가는 중. (3) 구독자 예외는 Debug 출력만 하고 삼켜서 운영 중에는 원인을 알기 어렵다(로그 파일이 필요). (4) Send의 true는 "큐에 넣음"일 뿐 전달 보장이 아니다.
+//
+// ■ 문제가 났을 때 어디를 볼까 (유지보수)
+//   - 로그인 직후 목록이 비어 있다 ............. Dispatch의 _holding 켜는 시점, MainForm이 ReleaseHeld를 불렀는지(MainForm.cs, MainForm.Network.cs)
+//   - 창이 멈춘다 ............................. 구독자가 Invoke(동기)를 쓰는지, UI 스레드에서 SendBulk/Disconnect를 부르는지
+//   - 끊겼다 다시 붙는 일이 잦다 ............... 하트비트 45초 규칙(Heartbeat.cs), 서버 SendQueue 한도, 클라이언트 NormalQueueLimit(10,000)
+//   - "보안 연결을 맺지 못했습니다" ............ 서버 Tls.Enabled, 서버 버전, 방화벽/프록시가 TLS를 막는지, 핸드셰이크 10초 시간 초과
+//   - 다른 곳에서 로그인했다는 메시지 ........... 서버 SessionManager가 보낸 ForceLogout → KickedOut=true라 자동 재접속 안 함(의도됨)
+// ───────────────────────────────────────────────────────────────────────────
 
 /// <summary>
 /// 서버 연결 + 수신 스레드 + 송신. 화면(Form)과 분리해 두어 콘솔/테스트에서도 그대로 쓸 수 있다.
@@ -336,6 +393,7 @@ public sealed class ChatClient : IDisposable
         //   그 코드가 오래 걸리거나 다른 lock을 기다릴 때 교착 상태가 생기기 쉽다.
         // [주의] 구독자에서 예외가 나면 수신 스레드가 죽고 프로그램 전체가 꺼진다. 패킷 하나만 버리고 계속 받는다.
         try { PacketReceived?.Invoke(packet); }
+        // [읽는 법] "메모리 부족만 빼고 모두 잡는다"는 필터. 구독자(화면) 코드의 버그가 수신 스레드를 죽여 프로그램 전체가 꺼지는 것을 막되, 정말 치명적인 오류는 숨기지 않는다. 단점: 오류가 Debug 출력으로만 남는다.
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             System.Diagnostics.Debug.WriteLine($"패킷 처리 중 오류 ({packet.Type}): {ex}");
@@ -430,9 +488,11 @@ public sealed class ChatClient : IDisposable
                     while (_normalQueue.Count == 0 && _bulkQueue.Count == 0)
                     {
                         if (generation != _generation || Volatile.Read(ref _closed) == 1) return;
+                        // [읽는 법] 큐가 비어 있으면 최대 1초 잠든다(Send가 PulseAll로 깨우면 즉시 일어남). 1초마다 한 번씩은 일부러 깨어나 "세대가 바뀌었나/닫혔나"를 확인해, 아무도 깨워 주지 않아도 스레드가 영원히 남지 않게 한다.
                         Monitor.Wait(_queueLock, 1000);
                     }
                     if (generation != _generation) return;
+                    // [읽는 법] 우선순위 큐의 단순 구현: 일반 큐에 뭐든 있으면 그것을 먼저, 없을 때만 대량 큐에서 꺼낸다. 위쪽 while 조건을 통과했으므로 둘 중 하나는 반드시 비어 있지 않다.
                     packet = _normalQueue.Count > 0 ? _normalQueue.Dequeue() : _bulkQueue.Dequeue();
                     Monitor.PulseAll(_queueLock); // SendBulk에서 자리를 기다리는 스레드를 깨운다
                 }
@@ -476,6 +536,7 @@ public sealed class ChatClient : IDisposable
             _normalQueue.Enqueue(Packet.Create(PacketType.Logout)); // 서버가 바로 접속 종료 처리를 하도록 알림 (맨 마지막 패킷)
             Monitor.PulseAll(_queueLock);
         }
+        // [주의] UI 스레드에서 최대 1.5초 기다린다. 서버가 로그아웃을 바로 알게 하려는 배려이지만, 네트워크가 막혀 있으면 창 닫기가 1.5초 느려진다(시간 초과 후에는 그냥 Close).
         _logoutSent.Wait(1500);
         Close("로그아웃");
     }

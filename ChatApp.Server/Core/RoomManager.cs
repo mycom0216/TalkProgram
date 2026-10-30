@@ -11,6 +11,45 @@ namespace ChatApp.Server.Core;
 // [스레드] 여러 사람의 수신 스레드가 동시에 부른다. lock 하나(_lock)로 모든 방 상태를 보호한다.
 //          lock 안에서는 메모리 작업만 하고, 실제 전송(Send)은 lock 밖에서 한다(Send는 큐에 넣기만 해서 빠르지만 습관적으로).
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   모든 채팅방의 "메모리 장부". 방 목록(_rooms), 방마다 멤버(Members), 지금 접속 중인 연결(Online)을 들고 있다.
+//
+// ■ 꼭 구분할 두 가지
+//   - Members = "자격". 방에 들어온 사람 명단. DB(room_members)에도 저장되고, 접속을 종료해도 그대로 남는다.
+//   - Online  = "지금 접속 중". 그 방 소식을 실시간으로 받을 연결(ClientSession) 명단. 접속을 종료하면 빠진다.
+//   양쪽 장부는 항상 같이 맞춘다: room.Online(방 → 접속자)과 session.JoinedRooms(접속자 → 방). 이 일을 Attach가 한다.
+//
+// ■ "3단계" 패턴 (입장·초대에서 반복되는 모양)
+//   ① 여기서 메모리에 자리를 먼저 잡는다(TryJoin / TryInvite: 정원·비공개 확인)  ② 호출한 쪽(RoomService)이 DB에 저장한다
+//   ③ DB 저장이 실패하면 RemoveMember로 되돌린다.  [왜] DB 작업을 lock 안에서 하면 DB가 느릴 때 모든 방의 전송이 멈추기 때문이다.
+//
+// ■ 면접 예상 질문과 답
+//   Q1. lock을 하나만 쓴 이유는요? 단점은요?
+//       A. 방 목록·멤버·접속자를 한꺼번에 바꾸는 작업(입장 + 장부 맞추기)이 많아서, lock 하나로 단순하고 틀리기 어렵게 만들었습니다.
+//          방이 아주 많아져 경합이 늘면 방마다 lock을 두거나 ConcurrentDictionary를 쓰는 식으로 나눌 수 있습니다.
+//   Q2. lock 안에서 DB 저장이나 전송을 하지 않는 이유는요?
+//       A. lock을 잡고 있는 동안 다른 스레드가 모두 기다립니다. DB가 느리면 서버 전체의 채팅이 같이 느려지므로, lock 안에서는 메모리 작업만 합니다.
+//   Q3. SendToRoom에서 ToArray()로 복사해서 lock 밖에서 보내는 이유는요?
+//       A. 보내는 도중에 누가 들어오거나 나가면 컬렉션을 순회하다 예외가 납니다. 스냅샷을 떠 두면 안전하고, lock도 짧게 잡습니다.
+//   Q4. 두 사람이 마지막 한 자리에 동시에 입장하면요?
+//       A. "정원이 찼는지 확인(IsFull)"과 "멤버로 추가"가 lock 안에서 한 덩어리로 실행되므로, 한 명만 성공하고 다른 한 명은 Full을 받습니다.
+//   Q5. 접속을 종료한 것과 방을 나간 것의 차이는요?
+//       A. 접속 종료는 Detach(접속 연결만 뗌, 멤버로는 남음)이고, 나가기는 Leave(멤버에서도 빠짐)입니다. 그래서 다시 로그인하면 내 방들이 그대로 있습니다.
+//   Q6. 방장이 나가면 누가 방장이 되나요?
+//       A. PickNextOwner가 "가장 먼저 들어온 멤버"를 고릅니다(JoinedAt 순서). 마지막 멤버까지 나가면 방이 목록에서 사라집니다.
+//   Q7. 같은 계정으로 다시 로그인하면 방 연결은 어떻게 되나요?
+//       A. TransferMembership이 이전 연결의 방들을 새 연결로 옮깁니다. 이전 연결이 나중에 끊겨도 Detach가 아무 방에서도 빼지 않아서 "나갔습니다" 알림이 뜨지 않습니다.
+//
+// ■ 문제가 났을 때 어디를 볼까 (유지보수)
+//   - 정원이 안 맞는다 / 가득 찼다고 나온다 .... TryJoin의 IsFull, SetMaxUsers(지금 멤버 수보다 작게는 못 바꿈)
+//   - 입장했는데 메시지가 안 온다 ................. Attach가 호출됐는지(Online에 들어갔는지)
+//   - 퇴장·입장 알림이 중복된다 .................... Detach / TransferMembership
+//   - 방 목록의 인원수가 다르다 ................... Room.ToInfo(MemberCount = 멤버 수, OnlineCount = 접속 수)
+// ───────────────────────────────────────────────────────────────────────────
 
 public enum JoinResult { Ok, NotFound, Full, AlreadyIn, Private }
 
@@ -225,6 +264,7 @@ public sealed class RoomManager
             if (!_rooms.TryGetValue(roomId, out room)) return LeaveResult.NotFound;
             if (room.IsLobby) return LeaveResult.Lobby;
             if (no is null || !room.Members.ContainsKey(no)) return LeaveResult.NotMember;
+            // [읽는 법] 이름 끝의 Locked = "이미 _lock을 잡은 상태에서만 부르는 내부 함수"라는 표시. lock 안에서 lock을 또 부르는 실수를 이름으로 막는다.
             closed = RemoveMemberLocked(room, no, session);
             return LeaveResult.Ok;
         }
@@ -291,6 +331,8 @@ public sealed class RoomManager
             room.Online.Remove(session);
             session.JoinedRooms.Remove(room);
         }
+        // [규칙] 기본 방(전체 채팅)은 비어도 없애지 않는다. 다른 방은 마지막 멤버가 나가면 목록에서 지우고 true를 돌려,
+        //        호출한 쪽에 "방이 닫혔다"고 알린다.
         if (room.IsLobby || room.Members.Count > 0) return false;
         _rooms.Remove(room.Id);
         return true;
@@ -314,6 +356,8 @@ public sealed class RoomManager
         lock (_lock) return room.Members.GetValueOrDefault(employeeNo);
     }
 
+    // [읽는 법] 양쪽 장부를 같이 맞춘다: 방 쪽(room.Online)과 사람 쪽(session.JoinedRooms). 한쪽만 바꾸면 "방에는 있는데 사람은 모르는" 상태가 된다.
+    //           lock이 없는 이유: 이 함수는 항상 _lock을 잡은 메서드 안에서만 부른다(그래서 private static).
     private static void Attach(Room room, ClientSession session)
     {
         room.Online.Add(session);

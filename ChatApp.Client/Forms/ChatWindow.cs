@@ -30,6 +30,60 @@
 //   - ImageHelper     : 클립보드 이미지를 PNG 파일로 저장.
 //   - FileRules       : 사진/동영상 확장자 목록(파일 선택 창 필터에 사용).
 // ═══════════════════════════════════════════════════════════════════════════════
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]  ※ 위 [역할]/[화면 구성]/[데이터 흐름] 설명에 더해, 면접에서 말로 설명하기 좋게 정리한 노트.
+//
+// ■ 한 줄 요약
+//   "화면만" 아는 대화창. 사용자의 행동을 이벤트로 올리고(메인 창이 전송·권한 처리), 대화 내용은 Conversation이 갖고 있어 창을 닫았다 열어도 남는다. 말풍선은 BubbleChatView가 직접 그린다.
+//
+// ■ 읽는 순서 (1258줄이라 덩어리로)
+//   ① 필드·이벤트 목록(위쪽) → ② 생성자(Conversation 구독/해제, 드래그 앤 드롭, 포커스 규칙) → ③ BuildLayout(Dock 배치, 입력칸)
+//   → ④ 입력 처리(OnInputKeyDown, Send, 멘션) → ⑤ 입력 중 표시, 답장, 댓글 창(OpenThread) → ⑥ 대화 내 검색(Ctrl+F) → ⑦ 파일 보내기(+메뉴, 끌어다 놓기, 붙여넣기)
+//
+// ■ 입력 중("OO 입력 중...") 표시의 전체 흐름
+//   입력칸 글자가 바뀔 때마다 TypingActivity(true) 이벤트 → 메인 창이 서버에 Typing 전송(서버가 세션당 1초에 한 번으로 줄임)
+//   → 2초 동안 입력이 없으면 _typingTimer가 TypingActivity(false) 전송 / 비우거나 보내면 즉시 false
+//   → 상대 창은 TypingUpdate를 받아 SetTypingIndicator: 4초 뒤 만료 시각 기록 + 0.5초 타이머가 만료된 사람을 지움(끊겨도 "입력 중"이 영원히 남지 않게)
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 이벤트로 올리고 메인 창이 처리(Presentation 분리) ..... "WinForms events decouple view from logic"
+//   - 구독 해제(FormClosed)와 메모리 누수 ................. "event subscription leak long lived publisher"
+//   - 디바운스/스로틀(입력 중 신호) ........................ "debounce throttle typing indicator"
+//   - 포커스를 빼앗지 않고 창 띄우기(ShowWithoutActivation) .. "ShowWithoutActivation focus steal"
+//   - 드래그 앤 드롭(AllowDrop, DragEnter/DragDrop) ........ "WinForms drag and drop FileDrop"
+//   - 클립보드 이미지/파일 붙여넣기 ......................... "Clipboard ContainsFileDropList ContainsImage"
+//   - 키 처리(SuppressKeyPress, ProcessCmdKey) ............. "KeyDown SuppressKeyPress ProcessCmdKey"
+//   - @멘션 자동완성(마지막 @ 이후 글자로 후보 필터) ........ "mention autocomplete textbox caret"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 대화창이 서버로 직접 보내지 않고 이벤트만 올리는 이유는요?
+//       A. 창은 여러 개인데 서버 연결은 하나입니다. 전송·연결 상태·권한 판단을 MainForm 한 곳에 모으면, 창마다 연결 상태를 따로 들고 있다가 어떤 창만 끊긴 줄 모르는 불일치가 생기지 않습니다. 창은 "보내 달라"만 알리고 화면만 책임지므로 단순합니다.
+//   Q2. 창을 닫았다 열어도 대화가 남는 이유는요? 닫을 때 무엇을 정리하나요?
+//       A. 대화 내용은 메인 창의 Conversation이 갖고 있고 창은 그것을 구독해 보여 줄 뿐입니다. 그래서 창이 닫힐 때 ItemAdded/ItemChanged/Reloaded/ReadStateChanged 구독을 반드시 해제합니다. 안 하면 Conversation → 창 참조가 남아 가비지 컬렉터가 회수하지 못하고(누수), 닫힌 창의 컨트롤에 그리려다 ObjectDisposedException이 납니다. 타이머도 멈추고 댓글 창도 함께 닫습니다.
+//   Q3. 자동으로 뜬 새 메시지 창이 내가 다른 프로그램에서 타이핑하는 걸 방해하지 않게 한 방법은요?
+//       A. ShowInactive가 잠깐만 ShowWithoutActivation을 true로 바꿔 창을 "활성화 없이" 띄웁니다. 입력칸 포커스도 Focus()를 직접 부르지 않고 ActiveControl로 "활성화될 때 어디에 줄지"만 정해 둡니다. 포커스를 가져가는 순간 사용자가 치던 글자가 이 창으로 들어가는 사고를 막습니다.
+//   Q4. "입력 중" 신호를 키 입력마다 보내면 서버 부하가 크지 않나요?
+//       A. 클라이언트는 글자가 바뀔 때마다 보내지만 서버가 세션당 1초에 한 번으로 줄이고(false 신호는 항상 통과). 상대 화면은 4초 만료 + 0.5초 타이머로, "멈춤" 신호가 유실돼도 표시가 스스로 사라집니다. 더 줄이려면 클라이언트에서도 1초 간격으로 보내면 됩니다(개선 후보).
+//   Q5. 메시지를 보낼 때 입력칸 Enter 처리에서 SuppressKeyPress를 쓰는 이유는요?
+//       A. Enter = 전송, Shift+Enter = 줄바꿈 규칙 때문입니다. 전송 처리 후 키 입력이 텍스트 상자로도 전달되면 입력칸에 줄바꿈이 하나 남거나 "띵" 소리가 납니다. SuppressKeyPress = true로 그 키를 입력칸에 전달하지 않게 합니다. Ctrl+V도 파일/이미지를 처리했다면 같은 방식으로 글자 붙여넣기를 막습니다.
+//   Q6. 파일을 보내는 경로가 여러 개인데(+메뉴, 끌어다 놓기, Ctrl+V) 어떻게 일관되게 처리하나요?
+//       A. 세 경로가 모두 RequestFiles 한 곳으로 모입니다. 폴더는 거르고(조각 전송 불가), 10개를 넘으면 한 번 확인하고(실수로 폴더 전체를 끌어다 놓는 경우 대비), FilesRequested로 메인 창에 넘깁니다. 이미지 붙여넣기는 임시 PNG로 저장한 뒤 같은 경로를 탑니다(전송 엔진은 "파일 경로"를 받아 조각냄).
+//   Q7. @멘션은 어떻게 동작하나요? 한계는요?
+//       A. 입력칸 커서 앞의 마지막 @ 이후 글자(공백 없음, 30자 이하)로 방 멤버를 이름·사원번호에 포함 검색(최대 8명)해 목록으로 보여 주고, Enter/Tab으로 "@이름 "을 끼워 넣습니다. 받는 쪽은 메시지에 "@내이름" 또는 "@내사원번호"가 포함되어 있는지로 판단하는데(MainForm.MentionsMe), 이름 일부만 맞아도(예: "@김"이 "김민수"에게) 걸릴 수 있는 한계가 있습니다. 서버가 멘션 대상을 구조화해서 보내면 정확해집니다.
+//   Q8. 한계는요? (솔직하게 답하기)
+//       A. (1) 1258줄로 크다: 입력 영역·검색 바·첨부 메뉴·멘션·헤더 그리기를 별도 컨트롤/클래스로 나누면 읽기 쉬워진다. (2) 대화 내 검색(Ctrl+F)은 이미 불러온 메시지에서만 찾는다(서버 검색과 별개). (3) 입력 500자 제한이 서버·DB(VARCHAR(500))와 같아야 하며 한쪽만 바꾸면 어긋난다. (4) 아이콘·메뉴를 코드로 그려 생성/해제 코드가 길다(Dispose에서 직접 정리).
+//   ※ 코드 정리 후보(동작 영향 없음): OnInputKeyDown 위의 <summary>가 검색 구역 머리글 위에 떨어져 있다(함수와 설명이 떨어짐).
+//
+// ■ 문제가 났을 때 어디를 볼까
+//   - 닫은 창이 메모리에 남는다/예외가 난다 ........ FormClosed의 구독 해제 목록, _threads 정리
+//   - 새 메시지가 와도 화면에 안 보인다 ............ Conversation.ItemAdded 구독 여부(창을 만든 직후 SetItems 이후), OnItemAdded → _view.AddItem
+//   - 위로 스크롤해도 이전 대화가 안 온다 ........... OnReachedTop 조건(HistoryHasMore, HistoryLoading), 메인 창의 RequestOlderHistory
+//   - Enter를 눌러도 안 보내진다 .................... 멘션 목록이 열려 있으면 Enter가 멘션 선택으로 쓰임(OnInputKeyDown 앞부분), _input.Enabled
+//   - 파일을 끌어다 놓아도 반응이 없다 ............... _input.Enabled(연결 끊김·상대 오프라인), AllowDrop 연결 대상(this/_view/_input)
+//   - "입력 중"이 사라지지 않는다 .................... SetTypingIndicator 만료(4초), _typingExpiryTimer 동작
+//   - 화면 배율에서 레이아웃이 어긋난다 .............. S()/LogicalToDeviceUnits를 쓰지 않은 고정 값
+// ───────────────────────────────────────────────────────────────────────────
 
 using System.ComponentModel;
 using ChatApp.Client.Chat;
@@ -382,6 +436,7 @@ internal sealed class ChatWindow : Form
         _input.MaxLength = 500;
         _input.Dock = DockStyle.Fill;
         _input.KeyDown += OnInputKeyDown;
+        // [읽는 법] 글자가 바뀔 때마다: ① @멘션 후보 목록 갱신 ② 이전 타이머 정지 ③ 입력칸에 글자가 있고 활성 상태면 "입력 중" 이벤트(true) 올림 ④ 2초 타이머 재시작(그 안에 또 바뀌면 다시 정지·재시작). 2초간 아무 입력이 없으면 타이머가 false를 올려 "입력 멈춤"을 알린다.
         _input.TextChanged += (_, _) =>
         {
             UpdateMentionList();
@@ -568,6 +623,7 @@ internal sealed class ChatWindow : Form
 
     public void SetTypingIndicator(string employeeNo, string displayName, bool isTyping)
     {
+        // [읽는 법] 상대가 입력 중이라는 신호를 받으면 "4초 뒤까지 유효"로 기록한다. 4초 안에 새 신호가 오면 연장되고, 안 오면 RefreshTypingLabel이 지운다. "멈춤" 신호가 네트워크에서 유실돼도 표시가 영원히 남지 않게 하는 만료 장치.
         if (isTyping) _typingUntil[employeeNo] = (displayName, DateTime.Now.AddSeconds(4));
         else _typingUntil.Remove(employeeNo);
         RefreshTypingLabel();
@@ -775,6 +831,7 @@ internal sealed class ChatWindow : Form
     /// <summary>지난 대화가 앞에 들어왔다 → 전체를 다시 배치해서 그린다.</summary>
     private void OnReloaded()
     {
+        // [읽는 법] 지난 대화가 앞에 끼어들면 목록을 통째로 다시 배치하는데, "위로 스크롤해서 이전 페이지를 불러온 경우"(LoadingOlderHistory)에는 보던 위치를 유지한다. 안 그러면 이전 대화를 불러올 때마다 화면이 맨 아래/맨 위로 튄다.
         _view.SetItems(Conversation.Items, preserveViewport: Conversation.LoadingOlderHistory);
         TryFocusPending(); // 지난 대화를 기다리던 검색 결과 메시지가 이제 들어왔을 수 있다
     }
@@ -794,6 +851,7 @@ internal sealed class ChatWindow : Form
     private void TryFocusPending()
     {
         if (_focusMessageId <= 0 || !_shown) return;
+        // [읽는 법] 검색 결과로 열린 창의 "대기 중인 이동 요청" 처리. 메시지가 아직 불러와지지 않았으면 아무 일 없이 돌아가고, 지난 대화가 들어와 Reloaded가 오면 다시 시도한다(OnReloaded → TryFocusPending). Items.Contains까지 확인하는 이유는 PendingHistory에만 있는 메시지(아직 화면에 안 들어간 것)를 제외하기 위해서다.
         if (Conversation.FindMessage(_focusMessageId) is { } item && Conversation.Items.Contains(item))
         {
             _focusMessageId = 0;
@@ -902,6 +960,7 @@ internal sealed class ChatWindow : Form
     private void MoveMatch(int step)
     {
         if (_matches.Count == 0) return;
+        // [읽는 법] 순환 이동 공식: step이 -1이어도 Count를 더한 뒤 % 하면 음수가 되지 않는다(0에서 이전으로 가면 마지막으로). 끝에 닿으면 반대쪽으로 돈다.
         _matchIndex = (_matchIndex + step + _matches.Count) % _matches.Count;
         ShowMatch(_searchBox.Text.Trim());
     }
@@ -978,6 +1037,7 @@ internal sealed class ChatWindow : Form
             _mentionList.Visible = false;
             return;
         }
+        // [읽는 법] before는 커서 앞의 글자 전부. 그중 마지막 @ 뒤가 "지금 치고 있는 멘션 검색어". 공백이 섞였거나 30자를 넘으면 멘션이 아니라고 보고 목록을 닫는다([..]는 범위 연산자: at+1부터 끝까지).
         string query = before[(at + 1)..];
         if (query.Any(char.IsWhiteSpace) || query.Length > 30)
         {
@@ -1026,6 +1086,7 @@ internal sealed class ChatWindow : Form
         if (text.Length == 0 || !_input.Enabled) return;
         // [왜] 실제 전송(패킷 만들기, 방 번호/상대 지정)은 메인 창이 한다. 이 창은 "보내 달라"고만 알린다.
         // 답장할 메시지가 그사이 지워졌으면 보통 메시지로 보낸다
+        // [읽는 법] 답장 대상이 그사이 삭제되었다면 답장이 아닌 보통 메시지로 보낸다(null). 삭제된 메시지에 매달린 답장을 서버가 받으면 의미가 없기 때문. long?은 "없을 수 있는 번호".
         long? replyId = _replyTo is { Deleted: false } r ? r.MessageId : null;
         SendRequested?.Invoke(this, text, replyId);
         _input.Clear();

@@ -11,12 +11,49 @@ namespace ChatApp.Client.Forms;
 //   - 화면 구조가 코드에 그대로 보여 공부·리뷰하기 쉽고, Git에서 변경 내용(diff)을 읽기 쉽다.
 //   - 공통 배치를 함수로 만들어 두면 창마다 같은 코드를 반복하지 않아도 된다.
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   여러 창이 같이 쓰는 "화면 부품 공장". 입력 표(CreateFormTable → AddFieldRow/AddSpanRow), 버튼(CreateButton/CreateButtonRow), 대화상자 머리(AddDialogHeader)를 함수로 만들어 두고, 마지막의 RunOnUi가 "수신 스레드 → UI 스레드" 전환을 책임진다. 이 파일에서 가장 중요한 면접 주제는 RunOnUi다.
+//
+// ■ 읽는 순서
+//   ① 상수(글꼴·색) → ② 표 만들기와 줄 추가 → ③ 버튼 → ④ 대화상자 머리(그라데이션 + 제목) → ⑤ RunOnUi
+//   대화상자를 만들 때의 정해진 흐름: table = CreateFormTable() → AddFieldRow/AddSpanRow로 줄 쌓기 → Controls.Add(table) → AddDialogHeader(this, table, 제목). (머리는 반드시 표를 다 채운 뒤에 붙인다.)
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - UI 스레드 규칙과 BeginInvoke ............... "WinForms cross-thread operation BeginInvoke vs Invoke"
+//   - Invoke 데드락 ............................. "Control.Invoke deadlock UI thread waiting"
+//   - TableLayoutPanel 자동 크기 ................. "TableLayoutPanel AutoSize column row"
+//   - LogicalToDeviceUnits(고DPI) ............... "WinForms LogicalToDeviceUnits PerMonitorV2"
+//   - static readonly Font 공유 .................. "share Font instance static readonly GDI handle"
+//   - 후위 증가(RowCount++) ...................... "C# postfix increment returns old value"
+//   - params 배열, 선택적 매개변수, 오버로딩 ......... "C# params optional parameters overload"
+//   - 디자이너 대신 코드로 UI 만들기 ............... "WinForms code-only UI vs Designer"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 수신 스레드에서 화면을 바꿀 때 왜 Invoke가 아니라 BeginInvoke를 쓰나요?
+//       A. WinForms 컨트롤은 만든 스레드(UI 스레드)에서만 건드릴 수 있어서 작업을 UI 스레드의 메시지 큐에 넣어야 합니다. Invoke는 끝날 때까지 기다리므로, UI 스레드가 마침 수신 스레드가 쥔 자원을 기다리는 중이면 서로 기다리는 교착 상태가 될 수 있고, UI가 느릴 때 수신도 같이 밀립니다. BeginInvoke는 큐에 넣고 바로 돌아와 수신 스레드가 막히지 않습니다.
+//   Q2. RunOnUi에서 IsDisposed/IsHandleCreated를 확인하고 예외도 잡는 이유는요?
+//       A. 창이 이미 닫혔거나 아직 핸들이 없으면 BeginInvoke가 예외를 던집니다. 그런데 확인한 직후에 UI 스레드가 창을 닫을 수도 있어서(경쟁 상태) 확인만으로는 막을 수 없습니다. 그래서 두 가지(사전 확인 + 예외 처리)를 같이 씁니다. 보여 줄 곳이 없으면 작업을 버려도 문제가 없습니다.
+//   Q3. 디자이너 파일(.Designer.cs)을 쓰지 않고 코드로 화면을 만든 이유는요?
+//       A. 화면 구조가 코드에 그대로 보여 읽고 리뷰하기 쉽고, 변경 내용(diff)이 사람이 읽을 만하게 나옵니다. 공통 배치를 함수로 만들어 중복도 줄입니다. 대신 화면을 눈으로 보며 고치는 편리함은 포기합니다.
+//   Q4. 폰트를 static으로 하나만 만드는 이유는요?
+//       A. Font는 GDI 핸들 같은 운영체제 자원을 씁니다. 창을 열 때마다 새로 만들면 핸들이 쌓이므로, 프로그램 전체에서 공유하는 읽기 전용 값으로 둡니다(프로그램이 끝날 때까지 쓰므로 Dispose하지 않아도 된다).
+//
+// ■ 알아 둘 점 (코드는 바꾸지 않음)
+//   - RunOnUi는 핸들이 아직 없으면 작업을 "버린다". 따라서 창이 화면에 만들어지기(Show) 전에 도착한 패킷은 처리되지 않는다. 대부분의 창이 Shown 이벤트에서 요청을 보내는 것도 이 때문에 안전하다.
+//   - 색·글꼴이 UiHelper(BaseFont, Primary 등)와 Ui/Theme(Body, Primary 등) 두 군데에 나뉘어 있다. UiHelper.Primary는 Theme.Primary를 가리키지만 글꼴은 서로 별개라 창마다 모양이 약간 다를 수 있다.
+//   - CreateButton의 MinimumSize(96, 34)와 CreateFormTable의 Padding(24, 20, 24, 16) 등은 원시 숫자라 고DPI에서는 AutoSize/배율 처리에 기대고 있다(입력칸 폭은 LogicalToDeviceUnits로 맞춤).
+// ───────────────────────────────────────────────────────────────────────────
 
 /// <summary>화면 공통 스타일과 배치 도우미 (디자이너 없이 코드로 화면을 만든다).</summary>
 internal static class UiHelper
 {
     // [개념] static readonly: 프로그램 전체에서 하나만 만들어 같이 쓰는 읽기 전용 값.
     //   Font는 윈도우 GDI 자원을 쓰므로 창마다 새로 만들기보다 한 번 만들어 공유하는 편이 가볍다.
+    // [주의] 이 글꼴 3개는 프로그램 내내 쓰는 공유 객체다. 창이 닫힐 때 절대 Dispose하면 안 된다(다른 창이 같은 객체를 쓰고 있다). Dispose가 필요한 것은 창이 따로 만든 글꼴뿐이다.
     public static readonly Font BaseFont = new("맑은 고딕", 10F);
     public static readonly Font BoldFont = new("맑은 고딕", 10F, FontStyle.Bold);
     public static readonly Font TitleFont = new("맑은 고딕", 15F, FontStyle.Bold);
@@ -50,6 +87,7 @@ internal static class UiHelper
     public static void AddSpanRow(TableLayoutPanel table, Control control)
     {
         // [개념] table.RowCount++ : 현재 행 수를 row에 담은 "다음에" 1 늘린다(후위 증가). 즉 새 행의 번호를 얻는다.
+        // [읽는 법] 아래 AddFieldRow(오버로드 2개)와 같은 패턴: 새 줄 번호를 얻고 → 줄 높이 규칙 추가(자동) → 컨트롤을 (열, 줄)에 넣는다.
         int row = table.RowCount++;
         table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         table.Controls.Add(control, 0, row);
@@ -71,6 +109,7 @@ internal static class UiHelper
 
         // [개념] LogicalToDeviceUnits: "100% 화면 배율 기준 픽셀"을 현재 모니터 배율(DPI)에 맞는 실제 픽셀로 바꾼다.
         //   예) 150% 배율 모니터에서 220 → 330. 이걸 안 하면 고해상도 모니터에서 입력칸이 글자보다 작아 보인다.
+        // [왜] 호출하는 쪽은 100% 배율 기준 숫자(220 등)만 넘기고, 실제 화면 배율에 맞춘 픽셀로 바꾸는 일은 여기서 한 번에 한다.
         input.Width = table.LogicalToDeviceUnits(inputWidth);
         input.Margin = new Padding(0, 4, 0, 4);
         table.Controls.Add(input, 1, row);
@@ -141,6 +180,7 @@ internal static class UiHelper
     /// 대화상자 위쪽에 하늘색 그라데이션 머리를 붙인다. 표(table)를 다 채우고 폼에 넣은 뒤 호출한다.
     /// </summary>
     // [주의] 호출 순서가 중요하다: 표에 모든 줄을 넣은 "뒤에" 불러야 GetPreferredSize가 최종 폭을 알려 준다.
+    // [읽는 법] header.Width = table.GetPreferredSize(...).Width : 표가 완성된 뒤의 "원하는 폭"을 물어 머리 폭을 맞추고, 표 폭이 바뀔 때(SizeChanged)도 따라간다. 표에 줄을 더 넣기 전에 부르면 폭이 틀려진다.
     public static void AddDialogHeader(Form form, TableLayoutPanel table, string title)
     {
         var header = new GradientPanel { Location = Point.Empty, Height = form.LogicalToDeviceUnits(60) };
@@ -175,6 +215,7 @@ internal static class UiHelper
     //   Invoke를 쓰면, UI 스레드가 마침 수신 스레드를 기다리는 중(예: lock 대기)일 때 서로를 기다리는 "교착 상태(데드락)"가
     //   생길 수 있고, UI가 느리면 수신 스레드도 같이 느려져 메시지 수신이 밀린다.
     // [스레드] 아무 스레드에서나 불러도 안전하다.
+    // [읽는 법] 사용법: UiHelper.RunOnUi(this, () => { 화면 바꾸는 코드 }); 모든 창의 OnPacketReceived가 이 한 줄로 UI 스레드에 넘긴다. 반환값이 없고(기다리지 않음), 창이 닫혔으면 조용히 버린다.
     public static void RunOnUi(Control control, Action action)
     {
         // [왜] 창이 닫혔거나(IsDisposed) 아직 화면에 만들어지지 않았으면(IsHandleCreated = false) BeginInvoke가 예외를 던진다.

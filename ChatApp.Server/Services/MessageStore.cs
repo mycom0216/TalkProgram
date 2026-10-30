@@ -24,6 +24,55 @@ using ChatApp.Server.Logging;
 //   - Run / Flush / SendHistory: 오직 "DbWriter" 스레드 1개에서만 실행 → DB 작업끼리는 lock이 필요 없다
 //   - Dispose: 서버 종료 시 메인 스레드(ChatServer.Stop)에서 호출
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   DB 저장을 전담하는 "DbWriter" 스레드와 그 앞의 큐. 채팅 저장, 지난 대화 읽기, 삭제·공감·읽음 같은 DB 작업을 한 줄로 세워 순서대로 처리한다.
+//
+// ■ 읽는 순서
+//   ① Job 종류(SaveJob/HistoryJob/ActionJob) → ② 큐에 넣는 쪽(Save, Enqueue, Request*History) → ③ 꺼내 처리하는 Run
+//   → ④ Flush(모아서 저장) → ⑤ SendHistory(지난 대화를 묶음으로 전송) → ⑥ Dispose(종료 때 마무리)
+//
+// ■ 한 장 그림
+//   [수신 스레드들] ──Save/Enqueue/Request──▶ [ 큐(BlockingCollection) ] ──▶ [DbWriter 스레드 1개] ──▶ DB
+//         (생산자, 바로 돌아옴)                       (들어온 순서대로)           (소비자, 모아서 저장)
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 생산자-소비자 패턴 ......... "producer consumer pattern BlockingCollection"
+//   - 배치(묶음) 저장과 트랜잭션 ... "batch insert transaction commit performance"
+//   - FIFO 순서 보장 .............. "FIFO queue ordering guarantee"
+//   - record와 with 식 ............ "C# record with expression immutable"
+//   - IDisposable / Join ........... "IDisposable Thread.Join graceful shutdown"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 채팅을 받을 때 바로 INSERT하지 않고 큐를 두는 이유는요?
+//       A. DB가 잠깐 느려지면 그 사람의 채팅 처리도 같이 멈춥니다. 수신 스레드는 큐에 넣기만 하고 바로 다음 패킷을 처리하고, DbWriter 한 스레드가 꺼내서 저장합니다.
+//   Q2. 저장·삭제·공감·지난 대화 불러오기를 왜 "한 큐"로 처리하나요?
+//       A. 순서를 지키기 위해서입니다. "보냄 → 곧바로 삭제"가 저장 → 삭제 순서로 처리되어 없는 메시지를 지우는 일이 없고, "보냄 → 곧바로 입장"에서도 입장한 사람이 방금 메시지를 받습니다.
+//   Q3. 배치 저장이 왜 빠른가요? 지연은 없나요?
+//       A. 커밋마다 디스크에 확실히 기록하는 비용이 드는데, 여러 개를 모아 한 번에 커밋하면 그 비용을 나눕니다. 큐가 비어 있으면 바로 저장해서 평소 지연은 없고, 쌓여 있을 때만 최대 200개까지 모읍니다.
+//   Q4. 묶음 저장 중 1개가 실패하면요?
+//       A. 묶음은 트랜잭션 하나라 200개가 모두 롤백됩니다. 그래서 한 개씩 다시 저장해서 문제 있는 메시지만 버리고 나머지는 살립니다.
+//   Q5. 서버를 끌 때 마지막 대화가 사라지지 않게 하려면요?
+//       A. Dispose에서 CompleteAdding으로 "더 안 받는다"고 표시하면 큐가 빌 때까지 처리하고 스레드가 끝납니다. Join(최대 5초)으로 기다려, DB가 멈춰 있어도 종료가 영원히 막히지 않게 합니다.
+//   Q6. 최근 메시지를 메모리에 기억하는(_recent) 이유는요?
+//       A. 방금 보낸 메시지는 아직 큐에서 저장을 기다리는 중일 수 있습니다. 그 메시지에 답장·삭제·공감이 오면 DB에는 아직 없으므로, 최근 20,000개는 메모리에서 먼저 찾습니다.
+//   Q7. 이 구조의 한계는 무엇인가요? (솔직하게 답하기)
+//       A. (1) 저장 큐에 개수 제한이 없어서 DB가 오래 느리면 큐가 메모리에 계속 쌓입니다(감시·경보나 한도가 필요). (2) DbWriter가 하나라 쓰기가 한 줄로 서는 병목이 될 수 있습니다. 순서 보장과 맞바꾼 선택이고,
+//          더 키우려면 방 단위로 나눠 여러 소비자를 두는 방법을 검토합니다.
+//   Q8. 지난 대화를 여러 묶음으로 나눠 보내는 이유는요?
+//       A. 패킷 하나는 최대 1MB인데, 사진 미리보기가 여러 장이면 한 패킷에 다 못 담습니다. 크기를 어림해서 약 600KB가 되면 보내고 새 묶음을 시작하며, 마지막 묶음에만 Last = true를 붙입니다.
+//   Q9. 지난 대화 요청에 개수 제한(20개)을 둔 이유는요?
+//       A. 지난 대화 한 번은 DB 읽기와 최대 수 MB 전송이라 무겁습니다. 같은 요청을 연달아 보내 DbWriter를 독점하는 것을 막기 위해 한 사람이 동시에 기다릴 수 있는 수를 제한합니다.
+//
+// ■ 문제가 났을 때 어디를 볼까 (유지보수)
+//   - 서버를 재시작했더니 마지막 대화가 없다 ... Dispose의 Join(5초)이 끝나기 전에 강제 종료됐는지, 로그의 "대화 저장 실패"
+//   - 메시지 번호가 겹치거나 이상하다 ........... NextId와 _lastId 초기화(MaxMessageId), 로그의 "마지막 메시지 번호를 읽지 못해"
+//   - 지난 대화가 안 나오거나 일부만 나온다 ..... SendHistory의 DbException 로그, HasMore·Last 값, 묶음 크기
+//   - 서버 메모리가 늘고 저장이 늦다 ............. DB 상태(느림·정지) → _queue에 작업이 쌓이는 중인지
+// ───────────────────────────────────────────────────────────────────────────
 namespace ChatApp.Server.Services;
 
 /// <summary>
@@ -92,6 +141,8 @@ public sealed class MessageStore : IDisposable
     /// <summary>방금 보낸 메시지를 기억한다.</summary>
     public void Remember(MessageMeta meta)
     {
+        // [읽는 법] 메모리 장부(_recent)에 넣고, 넣은 순서를 따로 큐(_recentOrder)에 기록한다. Dictionary는 순서를 모르기 때문이다.
+        //           20,000개를 넘으면 가장 오래된 것부터 지운다(먼저 들어온 것이 먼저 나가는 FIFO).
         _recent[meta.Id] = meta;
         _recentOrder.Enqueue(meta.Id);
         while (_recentOrder.Count > RecentLimit && _recentOrder.TryDequeue(out long old)) _recent.TryRemove(old, out _);
@@ -112,6 +163,8 @@ public sealed class MessageStore : IDisposable
     /// <summary>기억해 둔 메시지를 삭제됨으로 바꾼다.</summary>
     public void ForgetContent(long messageId)
     {
+        // [개념] with 식: record 객체를 "복사하면서 일부 값만 바꾼" 새 객체를 만든다(원본은 그대로). 다른 스레드가 옛 객체를 읽는 중이어도
+        //        값이 도중에 바뀌지 않고, 새 객체로 통째로 바꿔 끼우므로 안전하다.
         if (_recent.TryGetValue(messageId, out MessageMeta? meta)) _recent[messageId] = meta with { Deleted = true };
     }
 

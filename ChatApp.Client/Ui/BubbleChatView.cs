@@ -4,12 +4,64 @@ using ChatApp.Common.Models;
 
 namespace ChatApp.Client.Ui;
 
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   말풍선 대화 화면을 "표준 컨트롤 없이 직접 그리는" UserControl. 말풍선마다 좌표를 미리 계산해 두고(배치), 화면에 보이는 것만 그린다(OnPaint). ChatItem(데이터 + 배치 결과)과 BubbleChatView(배치 + 그리기 + 마우스)가 한 파일에 있다.
+//
+// ■ 세 단계로 읽기: 배치 → 그리기 → 상호작용
+//   ① 배치(LayoutItem): 글자 크기를 재서 말풍선 사각형(Bubble), 글(TextRect), 시각(TimeRect), 인용(QuoteRect), 공감 칩 위치를 ChatItem 안에 저장. 시작 y는 "바로 앞 말풍선의 아래쪽"에서 계산
+//   ② 그리기(OnPaint → DrawItem): 스크롤 위치(AutoScrollPosition.Y)만큼 밀어서(Shift) 보이는 구간의 말풍선만 그린다
+//   ③ 상호작용: 마우스 위치 → HitBubble/HitFile/HitReaction... 으로 "무엇을 눌렀나" 판정(저장된 사각형과 비교) → 이벤트 발생(창이 받아 메인 창에 전달)
+//
+// ■ 왜 이렇게 직접 그렸나 (설계 이유)
+//   - 대화가 수천 개여도 ListBox/Panel 컨트롤을 수천 개 만들면 느리고 핸들을 많이 쓴다. 직접 그리면 "보이는 것만" 그려서 가볍다(가상화).
+//   - 말풍선 모양(둥근 모서리, 인용, 공감 칩, 진행 막대)을 마음대로 그릴 수 있다.
+//   - 대신 직접 구현해야 하는 것이 많다: 스크롤, 클릭 판정, 접근성(화면 낭독기·UI 자동 테스트용 AccessibleName으로 보완).
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 오너 드로우(UserPaint) 컨트롤과 더블 버퍼 ......... "custom painted control OptimizedDoubleBuffer UserPaint"
+//   - 화면 가상화(보이는 것만 그리기) ................... "UI virtualization draw only visible items"
+//   - 좌표 변환(콘텐츠 좌표 ↔ 화면 좌표, 스크롤) ......... "AutoScrollPosition content coordinates hit testing"
+//   - 증분 배치(바뀐 항목부터 아래만 다시 계산) ......... "incremental layout invalidation chat list"
+//   - TextRenderer(GDI)로 측정과 그리기를 일치시키기 ..... "TextRenderer MeasureText DrawText consistency"
+//   - 히트 테스트(Hit testing) ......................... "hit testing rectangle mouse click custom control"
+//   - 스크롤 위치 보존(이전 대화 불러올 때) ............. "preserve scroll position prepend items chat"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 표준 컨트롤 대신 직접 그린 이유와 단점은요?
+//       A. 이유: 말풍선 모양을 자유롭게 그리고, 대화가 길어도 보이는 말풍선만 그려 가볍기 때문입니다(말풍선마다 컨트롤을 만들면 핸들·메모리가 크게 늘어남). 단점: 스크롤·클릭 판정·글자 선택·접근성을 직접 구현해야 하고(글자 드래그 선택은 없음), 버그 범위가 넓습니다. 화면 낭독기용으로 마지막 메시지를 AccessibleName에 넣는 보완을 했습니다.
+//   Q2. 새 메시지가 올 때마다 전체를 다시 계산하나요?
+//       A. 아닙니다. AddItem은 새 말풍선 하나만 배치하고 스크롤 범위만 늘립니다. 크기가 바뀌는 변경(삭제·공감)은 그 말풍선부터 아래만 다시 배치(RefreshItem)하고, 진행률처럼 크기가 같으면 다시 그리기만 합니다. 창 너비가 바뀌면 줄바꿈이 달라지므로 전체를 다시 배치합니다(Relayout). 각 말풍선이 "바로 앞 말풍선의 아래"에서 시작하는 구조라서 부분 재배치가 가능합니다.
+//   Q3. 새 메시지가 오면 항상 맨 아래로 스크롤하나요?
+//       A. 아닙니다. 새 메시지가 오기 직전에 맨 아래(여유 40px)를 보고 있었거나 내가 보낸 메시지일 때만 맨 아래로 갑니다. 위쪽 대화를 읽는 중이면 위치를 그대로 둡니다(읽던 곳이 갑자기 밀리면 불편하므로).
+//   Q4. 위로 스크롤해 이전 대화를 불러오면 화면이 튀지 않게 하는 방법은요?
+//       A. SetItems(preserveViewport: true)가 지금 화면 맨 위에 보이는 말풍선(anchor)과 그 말풍선이 화면 위에서 떨어진 거리를 기억해 두고, 목록을 다시 배치한 뒤 같은 말풍선이 같은 거리에 오도록 스크롤을 복원합니다.
+//   Q5. 클릭한 곳이 무엇인지 어떻게 알아내나요?
+//       A. 배치 때 저장해 둔 사각형(Bubble, AvatarRect, 공감 칩, 댓글 칩, 인용)과 마우스 위치를 비교합니다. 마우스 좌표는 스크롤만큼 보정(ToContent)해서 "콘텐츠 좌표"로 바꾼 뒤 비교합니다. 칩·아바타·인용·파일을 먼저 검사하고 나머지를 말풍선 클릭으로 처리하는 우선순위가 있습니다.
+//   Q6. 그리기가 느려지지 않게 한 점은요?
+//       A. (1) 더블 버퍼(깜빡임 방지) (2) OnPaint에서 화면 구간 밖의 말풍선은 건너뛰고(위쪽은 continue, 아래쪽은 break) 보이는 것만 그림 (3) 측정은 배치 때 한 번만 하고 그릴 때는 저장된 사각형을 사용. 글자 측정과 그리기에 같은 TextRenderer를 써서 측정한 크기와 실제 그린 모양이 어긋나지 않게 했습니다.
+//   Q7. 한계는요? (솔직하게 답하기)
+//       A. (1) OnPaint가 첫 말풍선부터 선형으로 건너뛰며 찾는다(O(N)) — 이진 탐색으로 시작 위치를 찾으면 수만 개에서도 빠르다. (2) Relayout이 모든 말풍선을 다시 재므로 창 크기를 끌 때 매우 긴 대화에서는 느릴 수 있다. (3) 글자를 드래그해서 선택·복사하는 기능이 없고 "복사"는 말풍선 단위다. (4) ChatItem이 데이터와 배치 좌표를 함께 가져서, 같은 대화를 두 화면에 보일 때는 복사본(CloneForView)을 써야 한다. (5) 파일 이미지(Thumbnail)를 Dispose하지 않는다.
+//
+// ■ 문제가 났을 때 어디를 볼까
+//   - 말풍선이 겹치거나 간격이 이상하다 ....... LayoutItem의 시작 y(prev.Y + prev.Height), 아래 말풍선 재배치 누락(RefreshItem의 크기 변화 감지)
+//   - 창 크기를 바꾸면 줄바꿈이 어긋난다 ...... OnResize의 Relayout 조건(_layoutWidth), 최소화 중 크기 0
+//   - 새 메시지에 스크롤이 안 내려간다 ......... AddItem의 wasAtBottom(IsAtBottom의 40px 여유), 내가 보낸 메시지 여부
+//   - 클릭이 엉뚱한 말풍선에 간다 ............. ToContent(스크롤 보정), 저장된 사각형이 최신인지(배치 후 변경 반영)
+//   - 이전 대화 불러오면 화면이 튄다 ........... SetItems의 preserveViewport 경로(ChatWindow.OnReloaded가 LoadingOlderHistory 전달)
+//   - 삭제·공감 후 화면이 안 바뀐다 ............ Conversation.NotifyChanged → ChatWindow.OnItemChanged → RefreshItem
+// ───────────────────────────────────────────────────────────────────────────
+
 internal enum ChatItemKind { Mine, Other, System, Notice, Error }
 
 /// <summary>파일 말풍선에서 고른 동작.</summary>
 internal enum FileCommand { Open, SaveAs, ShowInFolder, Cancel }
 
 /// <summary>대화 한 줄. 화면 배치(좌표)는 BubbleChatView가 계산해 넣는다.</summary>
+// [읽는 법] 이 클래스는 두 가지를 함께 가진다: ① 대화 내용(보낸 사람, 글, 시각, 메시지 번호, 공감 …) ② 아래쪽 "배치 결과" 필드(Y, Height, Bubble 사각형 등 internal). ②는 BubbleChatView만 쓰고 계산해 넣는다. 그래서 같은 객체를 두 화면이 쓰면 좌표가 꼬여 CloneForView로 복사해 쓴다.
 internal sealed class ChatItem
 {
     public ChatItemKind Kind { get; init; }
@@ -130,6 +182,7 @@ internal sealed class BubbleChatView : UserControl
 
     public BubbleChatView()
     {
+        // [읽는 법] 직접 그리는 컨트롤의 기본 설정 네 가지: 더블 버퍼(화면 밖 그림판에 그린 뒤 한 번에 보여 깜빡임 방지) / AllPaintingInWmPaint(배경 지우기를 따로 하지 않음) / UserPaint(내가 그린다) / ResizeRedraw(크기가 바뀌면 다시 그림).
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint |
                  ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
         AutoScroll = true;
@@ -237,6 +290,7 @@ internal sealed class BubbleChatView : UserControl
             : $"대화 {_items.Count}개 · 마지막: {(last.Kind == ChatItemKind.Mine ? "나" : last.Sender)}: {last.DisplayText}";
     }
 
+    // [읽는 법] 순서가 중요하다: ① 추가하기 "전에" 맨 아래를 보고 있었는지 기록(추가하면 스크롤 범위가 늘어 판단이 달라지므로) ② 목록에 추가 ③ 너비가 같으면 새 말풍선 하나만 배치, 다르면 전체 재배치 ④ 아래를 보고 있었거나 내가 보낸 메시지면 맨 아래로 스크롤.
     public void AddItem(ChatItem item)
     {
         bool wasAtBottom = IsAtBottom();
@@ -382,6 +436,7 @@ internal sealed class BubbleChatView : UserControl
     private static string ThreadText(ChatItem item) => $"↳ 댓글 {item.ReplyCount}";
 
     /// <summary>말풍선 아래 공감 칩 배치. 칩 줄의 높이(없으면 0)를 돌려준다.</summary>
+    // [읽는 법] 말풍선 아래 한 줄에 [댓글 칩][공감 칩 ...]을 가로로 늘어놓는다. 내 말풍선은 오른쪽 끝에 맞추고(alignRight) 상대는 왼쪽 끝에 맞춘다. 돌려주는 값은 이 줄이 차지하는 높이(없으면 0)이며, 말풍선의 전체 Height에 더해진다.
     private int LayoutReactions(ChatItem item, bool alignRight)
     {
         item.ReactionChips.Clear();
@@ -495,6 +550,7 @@ internal sealed class BubbleChatView : UserControl
             ThreadRequested?.Invoke(threadRoot);
             return;
         }
+        // [읽는 법] 튜플 패턴: HitReaction이 (말풍선, 이모지)를 돌려주면 reacted, emoji에 풀어 담는다(null이면 건너뜀). 같은 이모지 칩을 다시 누르면 서버가 "공감 취소"로 처리하므로 클라이언트는 매번 같은 요청을 보낸다.
         if (HitReaction(e.Location) is var (reacted, emoji))
         {
             ReactionRequested?.Invoke(reacted, emoji); // 같은 이모지를 다시 누르면 서버가 취소로 처리한다
@@ -556,6 +612,7 @@ internal sealed class BubbleChatView : UserControl
 
     // ───────── 스크롤 ─────────
 
+    // [읽는 법] "지금 맨 아래를 보고 있나?": 화면 맨 아래 위치(-AutoScrollPosition.Y + 화면 높이)가 전체 높이에서 40px 이내이면 true. 정확히 끝이 아니라 약간 위여도 "아래를 보는 중"으로 쳐 준다.
     private bool IsAtBottom() => -AutoScrollPosition.Y + ClientSize.Height >= AutoScrollMinSize.Height - S(40);
 
     // ───────── 대화 검색 (Ctrl+F) ─────────
@@ -624,6 +681,7 @@ internal sealed class BubbleChatView : UserControl
 
     private void CheckReachedTop()
     {
+        // [읽는 법] AutoScrollPosition.Y는 읽을 때 음수(위로 올라간 거리의 반대). 0에 가까우면 맨 위. _topNotified는 한 번 알린 뒤에는 위에서 내려갔다가 다시 올 때까지 또 알리지 않게 하는 "한 번만" 장치다(스크롤 이벤트가 연달아 와도 요청이 한 번만 나감).
         bool atTop = AutoScrollPosition.Y >= -S(24);
         if (atTop && !_topNotified)
         {
@@ -646,6 +704,7 @@ internal sealed class BubbleChatView : UserControl
 
         foreach (ChatItem item in _items)
         {
+            // [읽는 법] 가상화의 핵심 두 줄: 화면 위쪽 밖이면 건너뛰고(continue), 화면 아래쪽 밖이 처음 나오면 이후는 모두 밖이므로 반복을 끝낸다(break). 말풍선이 위에서 아래로 정렬되어 있어서 가능한 최적화다. S(30)은 시각·공감 칩이 말풍선 밖에 걸쳐 그려지는 여유.
             if (item.Y + item.Height + S(30) < viewTop) continue;
             if (item.Y > viewBottom) break;
             if (item == _focusItem)

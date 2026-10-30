@@ -8,6 +8,45 @@
 //         ItemActivated 이벤트(더블클릭·Enter)를 받아 1:1 창을 열거나 방에 들어간다.
 //         색·글꼴·아바타 그리기는 Theme을 사용한다.
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   동료 목록·채팅방 목록을 보여 주는 "직접 그리는" 목록 컨트롤. 줄마다 컨트롤을 만들지 않고, 컨트롤 하나가 화면에 보이는 줄만 OnPaint에서 그린다. 무엇이 눌렸는지는 마우스 y 좌표를 줄 번호로 바꿔서(IndexAt) 판단한다. 동작(1:1 열기, 방 입장, 메뉴)은 이벤트로 MainForm에 맡긴다.
+//
+// ■ 데이터와 상태 (이 세 가지만 이해하면 나머지가 읽힌다)
+//   - _items: 전체 목록(접힌 부서의 사람 포함) / _visible: 지금 보여야 하는 줄(접힌 부서는 빠짐)
+//   - 접힘·선택·강조는 객체가 아니라 "Key 문자열"(_collapsed, _selectedKey)로 기억한다. 서버에서 목록이 올 때마다 CardItem 객체를 새로 만들어도(SetItems) 선택·접힘이 유지된다.
+//   - 화면 갱신 흐름: SetItems → RebuildVisible(보일 줄 + 전체 높이 계산) → Invalidate → OnPaint(보이는 줄만 그림)
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 직접 그리기 컨트롤(OwnerDraw/UserPaint)과 가상화 ...... "custom drawn list control draw only visible rows"
+//   - 좌표 변환(AutoScrollPosition)과 히트 테스트 ........... "AutoScrollPosition hit testing custom control"
+//   - 상태를 Key로 기억해 목록 교체 후에도 유지 .............. "preserve selection by key when refreshing list"
+//   - IsInputKey(Enter를 컨트롤이 받게) ................... "WinForms IsInputKey Enter custom control"
+//   - init 속성(불변에 가까운 데이터 클래스) ................ "C# init only properties immutable DTO"
+//   - Invalidate는 "표시만" 하고 한 번에 그림 ............... "Invalidate vs Refresh vs Update WinForms"
+//   - TextRenderer.MeasureText로 폭 미리 재기 .............. "TextRenderer MeasureText layout badge width"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 사람이 수백~1000명이어도 목록이 가벼운 이유는요?
+//       A. 줄마다 Label/Panel을 만들지 않고 컨트롤 하나가 OnPaint에서 "화면 안에 걸친 줄만" 그립니다. 컨트롤(핸들)이 늘지 않아 메모리·생성 비용이 일정하고, 스크롤은 AutoScrollMinSize(전체 높이)만 알려 주면 윈도우가 처리합니다.
+//   Q2. 서버에서 접속자 목록이 자주 바뀌는데 선택·접힘이 풀리지 않는 이유는요?
+//       A. 선택과 접힘을 CardItem 객체가 아니라 Key("user:A0001", "dept:개발팀")로 기억합니다. 목록을 새로 만들어 통째로 바꿔도 같은 Key의 줄을 다시 찾아 선택·접힘을 되살립니다. (선택한 사람이 접힌 부서 안이면 화면에는 안 보이지만 Key는 남아 있어, 펼치면 다시 선택 상태입니다.)
+//   Q3. 클릭한 줄은 어떻게 알아내나요?
+//       A. 줄이 컨트롤이 아니라 그림이라서, 마우스 y에서 스크롤 양(AutoScrollPosition.Y, 아래로 내리면 음수)을 빼 "내용 전체 기준 y"를 구한 뒤 줄 높이를 차례로 더하며 어느 줄에 속하는지 찾습니다(IndexAt). 머리줄(30)과 일반 줄(58)의 높이가 달라서 단순 나눗셈이 아니라 합산합니다.
+//   Q4. 목록 컨트롤이 서버나 대화창을 직접 알지 못하게 한 이유는요?
+//       A. ItemActivated/ItemContextRequested/SelectionChanged 이벤트로 "무엇이 눌렸는지"만 알립니다. 동료 목록과 방 목록이 같은 컨트롤을 쓰고, 그다음 동작(1:1 창, 방 입장, 우클릭 메뉴)은 MainForm이 정합니다.
+//   Q5. Enter 키를 이 컨트롤이 받게 하려면요?
+//       A. 폼이 Enter를 기본 버튼 처리로 가로채지 않도록 IsInputKey에서 Enter를 true로 돌려주고, OnKeyDown에서 선택된 줄에 ItemActivated를 올립니다. 마우스로 클릭할 때 Focus()를 불러 키보드 포커스도 가져옵니다.
+//
+// ■ 알아 둘 점 (코드는 바꾸지 않음)
+//   - 키보드로 줄을 이동(↑ ↓)하는 처리는 없다. Enter(열기)만 있고, 줄 선택은 마우스로만 바뀐다(코드로 확인함). 접근성(키보드만 쓰는 사용자)을 생각하면 추가 후보.
+//   - 그리기(OnPaint)와 클릭 판정(IndexAt)이 줄을 처음부터 차례로 훑는다(O(N)). 지금 규모(수백~1000)에서는 문제없지만, 더 커지면 줄 높이 누적합 + 이진 탐색으로 바꿀 수 있다.
+//   - OnMouseDown은 마우스 버튼을 구분하지 않아서, 머리줄을 오른쪽 클릭해도 접힘이 토글된다. 사람 줄은 오른쪽 클릭하면 그 줄이 선택된 뒤 OnMouseUp에서 메뉴 요청이 올라간다.
+//   - 아바타 사진은 Theme.PhotoLookup(전역)에서 가져온다. 사진이 도착하면 이 컨트롤을 다시 그려야 하는데, 그 알림(AvatarCache.Changed)은 MainForm이 받아 목록을 갱신한다.
+// ───────────────────────────────────────────────────────────────────────────
 using System.ComponentModel;
 
 namespace ChatApp.Client.Ui;
@@ -54,6 +93,7 @@ internal sealed class CardListView : UserControl
     private const TextFormatFlags LineFlags =
         TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.VerticalCenter;
 
+    // [읽는 법] 아래 5개 필드가 이 컨트롤의 상태 전부다: 전체 줄(_items), 보이는 줄(_visible), 접힌 부서(_collapsed), 마우스가 올라간 줄 번호(_hover), 선택한 줄의 Key(_selectedKey).
     private List<CardItem> _items = [];               // 전체 목록(접힌 부서의 사람도 포함)
     private readonly List<CardItem> _visible = [];    // 지금 화면에 보여야 하는 줄만 (접힌 부서의 사람은 빠짐)
     private readonly HashSet<string> _collapsed = []; // 접혀 있는 부서 머리줄의 Key 목록
@@ -74,6 +114,7 @@ internal sealed class CardListView : UserControl
     /// <summary>줄을 오른쪽 클릭함 (그 줄, 목록 안의 마우스 위치). 메뉴는 MainForm이 띄운다.</summary>
     public event Action<CardItem, Point>? ItemContextRequested;
 
+    // [읽는 법] Key로 현재 보이는 줄에서 찾는다. 선택한 줄이 접힌 부서 안에 있으면 _visible에 없어서 null이 된다(선택 Key 자체는 남음).
     public CardItem? SelectedItem => _visible.FirstOrDefault(i => !i.IsHeader && i.Key == _selectedKey);
 
     // [개념] DPI(화면 배율) 대응: LogicalToDeviceUnits(30)은 "100% 배율 기준 30픽셀"을 지금 모니터 배율에 맞게 바꾼다.
@@ -125,6 +166,7 @@ internal sealed class CardListView : UserControl
         // [개념] AutoScrollMinSize: "내용 전체의 크기". 컨트롤보다 크면 그 차이만큼 스크롤할 수 있게 된다.
         //        가로는 0(가로 스크롤 없음), 세로는 모든 줄 높이의 합.
         int total = _visible.Sum(i => i.IsHeader ? HeaderHeight : RowHeight);
+        // [읽는 법] 전체 높이를 알려 주면 WinForms가 세로 스크롤바를 만들어 준다(가로 0 = 가로 스크롤 없음). 접기/펼치기 때마다 줄 수가 달라지므로 RebuildVisible에서 매번 다시 계산한다.
         AutoScrollMinSize = new Size(0, total);
         _hover = -1;
         // [개념] Invalidate(): "이 컨트롤을 다시 그려야 한다"고 표시만 한다. 실제 그리기(OnPaint)는
@@ -186,6 +228,7 @@ internal sealed class CardListView : UserControl
         if (item.IsHeader)
         {
             // [개념] HashSet.Add는 이미 있으면 false를 돌려준다 → "없으면 추가(접기), 있으면 제거(펼치기)"를 한 줄로 처리
+            // [읽는 법] 머리줄을 누르면 접힘 상태를 뒤집고 RebuildVisible로 보이는 줄과 스크롤 범위를 다시 만든다. 선택은 바뀌지 않는다.
             if (!_collapsed.Add(item.Key)) _collapsed.Remove(item.Key); // 접기 ↔ 펼치기
             RebuildVisible();
             return;
@@ -264,6 +307,7 @@ internal sealed class CardListView : UserControl
             CardItem item = _visible[i];
             int h = item.IsHeader ? HeaderHeight : RowHeight;
             // [왜] 화면 안에 걸쳐 있는 줄만 그린다. 1000명이 있어도 실제로 그리는 건 화면에 보이는 10여 줄뿐이다.
+            // [읽는 법] 이 줄의 위치(y)와 높이(h)로 "화면과 겹치는지" 판단해 보이는 줄만 그린다(가상화의 핵심). y는 스크롤하면 음수가 될 수 있다.
             if (y + h >= 0 && y <= ClientSize.Height)
             {
                 var row = new Rectangle(0, y, width, h);
@@ -298,6 +342,7 @@ internal sealed class CardListView : UserControl
         int size = S(40);
         // 줄의 세로 가운데에 놓기: (줄 높이 - 아바타 크기) / 2
         var avatar = new Rectangle(row.X + S(14), row.Y + (row.Height - size) / 2, size, size);
+        // [읽는 법] 사진 키(PhotoKey)가 있고 캐시에 사진이 있으면 사진, 아니면 이니셜 원. 사진은 Theme.PhotoLookup이 AvatarCache에서 찾아 준다.
         Theme.DrawAvatar(g, avatar, item.AvatarText ?? item.Title, item.AvatarColor, item.PhotoKey);
         if (item.ShowStatus)
         {
@@ -310,6 +355,7 @@ internal sealed class CardListView : UserControl
 
         // 오른쪽 배지
         // [왜] 배지를 이름보다 먼저 그린다. 배지 폭을 알아야 이름이 차지할 수 있는 폭(right)을 정할 수 있기 때문.
+        // [읽는 법] "오른쪽에서 왼쪽으로" 쌓는 방식: 배지를 먼저 그리고 그만큼 right를 줄여, 이름·설명이 쓸 수 있는 폭(right - x)을 정한다. 배지가 늘면 이름이 말줄임("...")으로 줄어든다.
         int right = row.Right - S(14);
         if (!string.IsNullOrEmpty(item.Badge))
         {

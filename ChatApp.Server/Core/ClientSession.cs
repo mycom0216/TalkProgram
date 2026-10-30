@@ -22,6 +22,51 @@ namespace ChatApp.Server.Core;
 // [연결]     ChatServer(Accept 스레드)가 만든다 → 받은 패킷은 PacketHandler.Handle로 넘긴다
 //            → 끊기면 PacketHandler.OnDisconnected로 알린다.
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   접속한 사람 1명 = ClientSession 1개 = 스레드 2개(수신 "Session-N", 송신 "Send-N") + 송신 큐 2개(일반 큐, 파일 큐).
+//
+// ■ 읽는 순서
+//   ① 필드(큐, Interlocked·volatile로 다루는 값) → ② Start / ReceiveLoop(받기) → ③ SendLoop / Send / SendBulk(보내기) → ④ Close(정리)
+//
+// ■ 패킷 하나의 여행 (서버 쪽)
+//   소켓 → 수신 스레드(ReceiveLoop) → NetworkHelper.ReadPacket → PacketHandler.Handle → (서비스가 처리)
+//   → 받을 사람의 session.Send(큐에 넣기만 함) → 그 사람의 송신 스레드(SendLoop) → NetworkHelper.WritePacket → 소켓
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - thread-per-client, 블로킹 I/O ........ "C# TcpClient 멀티 클라이언트 서버 스레드"
+//   - 생산자-소비자 패턴, BlockingCollection .. "BlockingCollection producer consumer"
+//   - 배압(backpressure) ................... "backpressure bounded queue"
+//   - 원자적 연산 Interlocked, volatile ..... "Interlocked.Exchange vs lock vs volatile"
+//   - CancellationToken(취소 신호) ........... "CancellationTokenSource Cancel"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 왜 접속자마다 스레드를 2개(수신·송신) 두었나요?
+//       A. 수신은 데이터가 올 때까지 멈춰 기다리는(블로킹) 호출이라 전용 스레드가 필요합니다. 송신을 따로 둔 이유는, 내가 남에게
+//          보낼 때 그 사람의 네트워크가 느려도 내 처리가 멈추지 않게 하려는 것입니다(큐에 넣고 바로 돌아옴).
+//          한계: 접속자가 수천 명이 되면 스레드 메모리 부담이 커서, 그때는 async/await 기반 소켓으로 바꾸는 것을 검토해야 합니다.
+//   Q2. 소켓에 여러 스레드가 동시에 쓰면 어떻게 되나요?
+//       A. 두 패킷의 바이트가 섞여 상대가 해석할 수 없습니다. 그래서 "소켓에 쓰는 스레드는 송신 스레드 하나뿐"으로 정해서 lock 없이 해결했습니다.
+//   Q3. Close()를 여러 스레드가 동시에 부르면요?
+//       A. Interlocked.Exchange로 값을 1로 바꾸고 이전 값을 확인합니다. 이전 값이 0이었던 스레드 딱 하나만 정리를 하므로, 퇴장 처리가 두 번 실행되지 않습니다.
+//   Q4. 클라이언트가 데이터를 안 읽고 버티면 서버 메모리가 차지 않나요?
+//       A. 두 겹으로 막았습니다. (1) 못 보낸 데이터가 64MB 또는 2만 패킷을 넘으면 연결을 끊고, (2) 소켓 쓰기 제한 시간(기본 120초)이 지나면 쓰기가 실패해 정리됩니다.
+//   Q5. 큰 파일을 보내는 중에도 채팅이 바로 가는 이유는요?
+//       A. 큐를 둘로 나눴습니다. 송신 스레드가 일반 큐(채팅)를 먼저 꺼내고, 파일 조각 큐는 8칸으로 제한해 한 칸 보낼 때마다 한 칸씩만 더 읽습니다(배압).
+//   Q6. volatile, Interlocked, lock은 뭐가 다른가요?
+//       A. volatile은 "다른 스레드가 바꾼 최신 값을 보게" 할 뿐이고, Interlocked는 "읽고-바꾸고-쓰기"를 한 동작으로 만들며, lock은 여러 줄을 한 덩어리로 묶습니다.
+//   Q7. 한 클라이언트의 오류가 서버 전체를 죽이지 않게 어떻게 했나요?
+//       A. 스레드 안에서 잡히지 않은 예외는 프로세스 전체를 종료시킵니다. 그래서 ReceiveLoop·SendLoop 마지막에 catch(Exception)과 finally로 Close()를 두었습니다.
+//
+// ■ 문제가 났을 때 어디를 볼까 (유지보수)
+//   - 접속하자마자 끊긴다 ............ AuthenticateTls(서버 로그의 "TLS 협상 실패"), 클라이언트가 평문인지 확인
+//   - 특정 사람에게만 메시지가 안 간다 .. Send()의 큐 한도 로그("보내지 못한 데이터가 ...MB를 넘어")
+//   - 퇴장 알림이 두 번 뜬다 .......... Close()의 Interlocked 처리, PacketHandler.OnDisconnected
+//   - 서버 메모리가 계속 늘어난다 ...... _queue / _bulk 크기, _queuedBytes, SendBulk 배압
+// ───────────────────────────────────────────────────────────────────────────
 
 /// <summary>
 /// 접속한 클라이언트 1명. 클라이언트 1명당 스레드 2개를 가진다.
@@ -290,6 +335,8 @@ public sealed class ClientSession
                 int from = BlockingCollection<Packet>.TakeFromAny(queues, out Packet? packet, _closing.Token);
                 // [개념] packet! : "여기서 null이 아님을 내가 보장한다"고 컴파일러에게 알리는 표시(null-forgiving).
                 NetworkHelper.WritePacket(_stream, packet!);
+                // [읽는 법] from은 "어느 큐에서 꺼냈나"(0 = 일반 큐, 1 = 파일 큐). 일반 큐에서 꺼낸 패킷만 크기를 대기 바이트(_queuedBytes)에서 뺀다.
+                //           (Send()가 더할 때 일반 큐 패킷만 세었기 때문에, 뺄 때도 같은 기준을 지켜야 숫자가 맞는다.)
                 if (from == 0) Interlocked.Add(ref _queuedBytes, -packet!.ToWireBytes().Length); // 보냈으니 대기 바이트에서 뺀다
                 // SendAndClose로 넣은 "마지막 패킷"을 보냈으면 연결을 닫는다
                 if (ReferenceEquals(packet, Volatile.Read(ref _lastPacket))) break;

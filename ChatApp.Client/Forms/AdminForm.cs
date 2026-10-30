@@ -14,10 +14,56 @@ namespace ChatApp.Client.Forms;
 // [주의] 메뉴를 관리자에게만 보여 주는 것은 "편의"다. 실제 권한 확인은 서버(PacketHandler.HandleAdmin)가 매번 한다.
 //        누가 클라이언트를 고쳐 이 창을 띄워도 서버가 거절하고 감사 로그에 남긴다.
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   관리자 전용 창. 탭 3개(회원 / 감사 로그 / 통계)가 각각 서버에 "요청 패킷"을 보내고, 응답이 오면 화면(ListView·카드·그래프)에 그린다. 화면은 보여 주기만 하고 판단은 서버가 한다.
+//
+// ■ 구조 (요청 → 응답 → 그리기)
+//   - 요청: RequestUsers(AdminUserListReq) / RequestAudit(AdminAuditReq + AuditQuery) / RequestStats(AdminStatsReq) / RunAction(AdminActionReq + AdminAction)
+//   - 응답: OnPacketReceived(수신 스레드) → RunOnUi → HandlePacket → ShowUsers / ShowAudit / ShowStats / 임시 비밀번호 표시
+//   - 탭을 처음 열 때만 불러오는 지연 로딩: 창이 뜨면(Shown) 회원 목록, 감사 로그 탭은 비어 있을 때만, 통계 탭은 열 때마다 새로 요청
+//   - AdminNotify(새 가입 신청 등) 알림이 오면 회원 목록을 다시 불러온다
+//
+// ■ 권한은 어디서 지키나 (가장 중요한 포인트)
+//   - 이 창의 버튼 켜고 끄기(UpdateActionButtons)는 "실수 방지용 편의"다. 진짜 규칙은 서버(PacketHandler.HandleAdmin의 IsAdmin 확인, AdminService의 검사)에 있다.
+//   - 서버가 막는 것(확인함): 관리자가 아닌 사용자의 요청 거절 + 감사 로그(Denied) 기록 / 자기 자신에게 정지·퇴사 등 / 마지막 관리자를 정지·퇴사·해제
+//   - 그래서 누가 클라이언트를 고쳐서 이 창을 띄워도 서버가 같은 요청을 거절한다.
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 클라이언트 검증은 편의, 서버 검증이 보안 .......... "never trust the client server-side authorization"
+//   - ListView 갱신 최적화(BeginUpdate/EndUpdate) ....... "ListView BeginUpdate EndUpdate flicker"
+//   - Dock 순서와 컨트롤 추가 순서 ....................... "WinForms Dock order z-order Fill Top Bottom"
+//   - 남는 폭을 쓰는 마지막 열(StretchColumn) ............ "ListView column auto fill remaining width"
+//   - UTC 저장 → 로컬 시간 표시 .......................... "store UTC display local time DateTime.Kind"
+//   - 감사 로그(누가·언제·무엇을) ........................ "audit log security who what when"
+//   - 클립보드에 비밀 값을 둘 때의 위험과 자동 삭제 ...... "clipboard sensitive data clear timeout"
+//   - 임시 비밀번호 + 첫 로그인 때 강제 변경 .............. "temporary password force change on first login"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 관리자 메뉴는 관리자에게만 보이게 했는데, 그걸로 충분한가요?
+//       A. 아니요. 메뉴 숨김은 편의일 뿐이고, 서버가 요청마다 관리자 여부를 확인합니다. 권한이 없는 요청은 거절하고 감사 로그에 Denied로 남깁니다.
+//   Q2. 관리자가 실수로 자기 계정을 막거나, 관리자가 0명이 되면요?
+//       A. 서버가 자기 자신에게 하는 정지·퇴사·강제 종료 등을 거절하고, 마지막 활성 관리자를 정지·퇴사·해제하는 것도 거절합니다. 이 창은 같은 조건으로 버튼도 꺼 두지만(보조), 지키는 곳은 서버입니다.
+//   Q3. 비밀번호 초기화는 어떻게 안전하게 하나요?
+//       A. 서버가 임시 비밀번호를 만들어 이 창에만 한 번 보여 주고, 서버 로그·감사 로그에는 남기지 않습니다. 관리자 PC 클립보드에도 복사하되 60초 뒤 같은 값이 남아 있으면 지웁니다. 본인은 임시 비밀번호로 로그인하면 새 비밀번호로 바꿔야 진행됩니다.
+//   Q4. 통계 날짜가 서버 시간과 다르게 보일 수 있지 않나요?
+//       A. 서버는 UTC 시각 목록을 주고, 클라이언트가 내 PC 시간대 기준으로 날짜·시간별로 묶어 보여 줍니다. 그 계산은 Common의 AdminStatsView에 두어 단위 테스트로 자정 경계까지 확인합니다. 화면에도 "내 PC 시간 기준"이라고 적어 둡니다.
+//   Q5. 회원 검색은 서버에 묻나요?
+//       A. 상태 필터는 서버에 요청하고(목록 자체를 다시 받음), 이름·사원번호·부서 검색어는 이미 받은 목록에서 화면에서만 거릅니다(타이핑할 때마다 서버를 부르지 않게). 새로고침해도 선택된 회원은 유지합니다.
+//
+// ■ 알아 둘 점 (코드는 바꾸지 않음)
+//   - 회원 목록·감사 로그는 "전체를 받아서 다시 그린다"(최대 건수는 감사 로그 100~1000건 선택). 회원이 아주 많아지면 페이지 단위 요청이 필요할 수 있다.
+//   - ShowTempPassword 위의 /// <summary> 한 줄이 짝 없이 남아 있어 문서 주석이 어긋나 있다(동작에는 영향 없음).
+//   - 임시 비밀번호는 메시지 상자에도 그대로 보인다(어깨너머 노출 가능). 화면 공유 중에는 주의.
+// ───────────────────────────────────────────────────────────────────────────
 
 public sealed class AdminForm : Form
 {
     private readonly ChatClient _client;
+    // [왜] 내 사원번호를 알아야 "내 계정에는 정지·퇴사·관리자 해제 버튼을 끈다"를 계산할 수 있다(서버도 따로 막음).
     private readonly string _myNo;
 
     // 회원 탭
@@ -46,6 +92,7 @@ public sealed class AdminForm : Form
     private readonly Label _status = new() { Dock = DockStyle.Bottom, Height = 26, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0) };
 
     // 상태 필터 (화면 글자, 서버에 보낼 값)
+    // [읽는 법] (화면에 보이는 글자, 서버에 보내는 값) 쌍. 값이 null이면 "전체"(필터 없음). 서버는 PENDING/ACTIVE/SUSPENDED/RESIGNED 문자열로 구분한다.
     private static readonly (string Text, string? Value)[] Filters =
         [("전체", null), ("승인 대기", "PENDING"), ("사용 중", "ACTIVE"), ("정지", "SUSPENDED"), ("퇴사", "RESIGNED")];
 
@@ -65,6 +112,7 @@ public sealed class AdminForm : Form
         tabs.TabPages.Add(BuildUsersTab());
         tabs.TabPages.Add(BuildAuditTab());
         tabs.TabPages.Add(BuildStatsTab());
+        // [읽는 법] 탭을 누르는 순간 필요한 자료만 요청한다(지연 로딩). 감사 로그는 한 번 불러왔으면 다시 안 부르고, 통계는 열 때마다 최신으로 새로 받는다.
         tabs.SelectedIndexChanged += (_, _) =>
         {
             if (tabs.SelectedIndex == 1 && _audit.Items.Count == 0) RequestAudit();
@@ -75,6 +123,7 @@ public sealed class AdminForm : Form
 
         _client.PacketReceived += OnPacketReceived;
         FormClosed += (_, _) => _client.PacketReceived -= OnPacketReceived;
+        // [왜] 생성자가 아니라 Shown(창이 실제로 보인 뒤)에서 요청한다 → 창이 먼저 뜨고, 응답이 빨리 와도 컨트롤이 준비된 상태에서 그려진다.
         Shown += (_, _) => RequestUsers();
     }
 
@@ -125,6 +174,7 @@ public sealed class AdminForm : Form
     }
 
     /// <summary>서버 시각(UTC)을 내 PC 시간으로. JSON에서 Kind가 빠져 와도 UTC로 본다.</summary>
+    // [왜] DateTime은 JSON을 거치면 Kind(UTC인지 로컬인지)가 사라질 수 있다. 서버 시각은 UTC라고 약속해 두고 여기서 한 곳으로 모아 변환한다.
     private static DateTime ToLocal(DateTime time) => AdminStatsView.ToLocal(time, TimeZoneInfo.Local);
 
     /// <summary>받은 통계를 카드·그래프로 그린다. 시간별(UTC) 자료를 내 PC 시간대 기준 날짜·시간으로 묶는다.</summary>
@@ -141,6 +191,7 @@ public sealed class AdminForm : Form
             dayLabels[i] = i == 6 ? "오늘" : $"{day:M/d}({"일월화수목금토"[(int)day.DayOfWeek]})";
         }
         // 시간대 계산은 Common의 AdminStatsView에 있다 (단위 테스트 StatsViewTests로 자정 경계까지 확인)
+        // [읽는 법] 서버가 준 "시간별 집계(UTC)"를 내 PC 시간대 기준 7일 × 24시간 칸으로 다시 묶는다. 자정 경계(UTC 날짜와 로컬 날짜가 다른 시간)에서 틀리기 쉬워 Common으로 빼고 테스트한다.
         int[] dayValues = AdminStatsView.Daily(s.MessageHours, today, TimeZoneInfo.Local);
 
         // 시간대별 로그인 (7일 동안 그 시간에 로그인한 사람 수의 합)
@@ -164,6 +215,7 @@ public sealed class AdminForm : Form
         {
             double used = 1 - s.DiskFreeBytes / (double)s.DiskTotalBytes;
             double freeRatio = s.DiskFreeBytes / (double)s.DiskTotalBytes;
+            // [읽는 법] 남은 디스크 비율 기준 색: 10% 미만 빨강 / 20% 미만 주황 / 그 외 기본색. 아래 안내 문구의 "10% 미만"과 같은 기준이다.
             Color accent = freeRatio < 0.1 ? Theme.Danger : freeRatio < 0.2 ? Theme.Notice : Theme.Primary;
             _cardDisk.SetValue("남은 디스크", FileRules.FormatSize(s.DiskFreeBytes), $"전체 {FileRules.FormatSize(s.DiskTotalBytes)}", accent);
             _diskBar.SetData("파일 보관 디스크 사용량", used, s.FileBytes / (double)s.DiskTotalBytes,
@@ -273,6 +325,7 @@ public sealed class AdminForm : Form
     /// [왜] 칸 너비를 모두 고정하면 창이 좁을 때 오른쪽 칸(마지막 로그인)이 잘려 가로 스크롤이 생긴다.
     ///      내용 길이가 들쭉날쭉한 칸(이메일, 감사 로그 내용) 하나만 늘었다 줄었다 하게 하면 나머지 칸은 항상 보인다.
     /// </summary>
+    // [읽는 법] 지역 함수 Fit()이 "내가 정한 열 말고 나머지 열의 폭 합"을 빼서 남는 폭을 한 열에 몰아준다. 창 크기가 바뀌거나 사용자가 다른 열 폭을 끌 때마다 다시 계산(ColumnWidthChanged에서 자기 열 변경은 무시 → 무한 반복 방지).
     private void StretchColumn(ListView list, int index)
     {
         void Fit()
@@ -356,6 +409,8 @@ public sealed class AdminForm : Form
     private AdminUserInfo? Selected => _users.SelectedItems.Count > 0 ? _users.SelectedItems[0].Tag as AdminUserInfo : null;
 
     /// <summary>선택한 회원에게 관리 동작. 되돌리기 어려운 동작은 확인을 받고, 정지·강제 로그아웃은 사유를 묻는다.</summary>
+    // [읽는 법] 동작을 세 부류로 나눈다: ① 사유를 묻는 동작(정지·강제 로그아웃·퇴사) ② 확인만 받는 동작(거절·비밀번호 초기화·관리자 지정/해제, 기본 버튼은 "아니요") ③ 바로 실행(승인·재개·잠금 해제).
+    // 결과는 여기서 처리하지 않는다. 서버 응답(AdminActionRes)이 오면 HandlePacket에서 성공/실패를 보여 주고 목록을 다시 불러온다 → 화면 상태는 항상 서버 기준.
     private void RunAction(AdminActionType type)
     {
         if (Selected is not AdminUserInfo user) return;
@@ -407,6 +462,7 @@ public sealed class AdminForm : Form
                 ShowStatus($"회원 {_allUsers.Count}명을 불러왔습니다. ({DateTime.Now:HH:mm:ss})", error: false);
                 break;
 
+            // [읽는 법] 실패하면 서버가 준 이유(Body)를 상태줄과 경고창에 보여 준다. 성공하고 임시 비밀번호가 들어 있으면(비밀번호 초기화) 한 번만 보여 준다.
             case PacketType.AdminActionRes:
                 ShowStatus(packet.Body ?? "", error: !packet.Success);
                 if (!packet.Success)
@@ -464,6 +520,7 @@ public sealed class AdminForm : Form
             else if (u.Status is "SUSPENDED" or "RESIGNED") item.ForeColor = Color.Gray;
             if (u.LockMinutesLeft > 0) item.ForeColor = UiHelper.Danger;
             _users.Items.Add(item);
+            // [왜] 목록을 지우고 다시 만들면 선택이 사라진다. 새로고침(또는 동작 직후 재조회)해도 같은 사람이 선택된 채 남게 사원번호로 찾아 다시 선택한다.
             if (u.EmployeeNo == selectedNo) item.Selected = true; // 새로 고쳐도 선택 유지
         }
         _users.EndUpdate();
@@ -480,6 +537,8 @@ public sealed class AdminForm : Form
         bool me = u?.EmployeeNo == _myNo;
         foreach (Button b in _actions.Controls.OfType<Button>())
         {
+            // [읽는 법] 버튼의 Tag에 동작 종류를 넣어 두었다가 switch 식으로 "이 회원 상태에서 가능한 동작인가"를 계산한다(승인·거절=승인 대기 / 정지=사용 중 / 재개=정지·퇴사 / 잠금 해제=잠겨 있을 때 / 강제 로그아웃=접속 중 …).
+            // [주의] 이 표는 서버 규칙의 "복사본"이다. 서버 규칙이 바뀌면 여기도 같이 고쳐야 버튼과 실제 동작이 어긋나지 않는다(서버가 최종 판단).
             b.Enabled = u is not null && b.Tag is AdminActionType type && type switch
             {
                 AdminActionType.Approve or AdminActionType.Reject => u.Status == "PENDING",
@@ -507,6 +566,7 @@ public sealed class AdminForm : Form
                 e.ActorNo ?? "-", e.TargetNo ?? "-", e.Detail ?? "", e.ClientIp ?? "",
             ]);
             // 보안상 눈여겨볼 기록은 빨간색
+            // [왜] 로그인 실패와 권한 거절(Denied)은 보안상 눈여겨볼 기록이라 빨강으로 표시해 한눈에 찾게 한다.
             if (e.Action is AuditActions.LoginFail or AuditActions.Denied) item.ForeColor = UiHelper.Danger;
             _audit.Items.Add(item);
         }
@@ -520,6 +580,7 @@ public sealed class AdminForm : Form
     /// 60초 뒤 클립보드에 아직 그 임시 비밀번호가 있으면 지운다.
     /// [왜] 클립보드는 모든 프로그램이 읽을 수 있고, 클립보드 기록(Win+V)에도 남는다. 다른 것을 복사했으면 건드리지 않는다.
     /// </summary>
+    // [읽는 법] 60초 뒤 타이머가 한 번 돌고 스스로 멈춘다(Stop+Dispose). 그 사이 사용자가 다른 것을 복사했다면(내용이 다르면) 건드리지 않는다.
     private static void ClearClipboardLater(string secret)
     {
         var timer = new System.Windows.Forms.Timer { Interval = 60_000 };
@@ -553,6 +614,7 @@ public sealed class AdminForm : Form
     }
 
     /// <summary>한 줄 입력 대화상자. 취소하면 null, 빈칸이면 "".</summary>
+    // [개념] 이 창 안에서 쓰는 작은 입력 대화상자. using var form으로 닫힐 때 자원을 정리하고, 확인=OK/취소=null을 돌려줘 호출한 쪽이 "취소"와 "빈 사유"를 구분한다.
     private string? Prompt(string label, string title)
     {
         using var form = new Form

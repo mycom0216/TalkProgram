@@ -35,6 +35,60 @@ namespace ChatApp.Server.Services;
 //     2) Regex 객체는 .NET 문서상 여러 스레드에서 동시에 IsMatch를 불러도 안전하다.
 //     3) 실제로 바뀌는 데이터(사용자 행)는 DB가 동시성을 처리한다(PRIMARY KEY/UNIQUE 제약, 한 문장짜리 UPDATE).
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]  ※ 이 파일은 기존 설명이 많으므로, 흐름 · 면접 질문 · 아직 설명이 없던 부분(LDAP, 잠금, 임시 비밀번호)을 보강한다.
+//
+// ■ 한 줄 요약
+//   "이 사람이 누구인지 확인하는 규칙" 모음: 가입 검사, 로그인 검사(잠금·계정 상태·LDAP), 비밀번호 변경·초기화. 네트워크는 모르고 규칙만 안다.
+//
+// ■ 로그인 한눈에 보기 (Login → LoginLocked, 위에서 아래로 "검사 순서"가 곧 설계다)
+//   ① 빈 값이면 거절 → ② [같은 사원번호끼리 한 줄로] lock → ③ DB에서 사용자 조회
+//   ④ 없는 사원번호 → 가짜 해시로 같은 시간만큼 계산한 뒤 "틀렸다"(시간으로 존재 여부를 못 알아내게)
+//   ⑤ 잠금 중이면 비밀번호를 보지도 않고 거절 → ⑥ 인증: LDAP 계정이면 사내 서버에 확인, 아니면 PBKDF2 해시 비교
+//   ⑦ 실패면 횟수 +1(한도에 닿으면 잠금) → ⑧ 성공이어도 계정 상태(승인 대기/정지/퇴사) 확인 → ⑨ 화면용 UserInfo로 변환해서 반환
+//   ※ "성공 기록"은 여기서 하지 않는다. 중복 접속 확인까지 통과한 뒤 PacketHandler가 RecordLoginSuccess를 부른다.
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 해시 + salt, PBKDF2(반복 100,000회, SHA-256) ........ "password hashing PBKDF2 salt iterations"
+//   - 상수 시간 비교(FixedTimeEquals, PasswordHasher) ..... "constant time comparison timing attack"
+//   - 계정 열거(enumeration) 방지: 같은 문구 + 같은 시간 ... "user enumeration timing attack login"
+//   - 무차별 대입 방어: 실패 횟수 잠금 ...................... "brute force account lockout"
+//   - 줄무늬 잠금(lock striping) ............................ "lock striping"
+//   - LDAP 바인드 인증, LDAPS(포트 636), 필터 이스케이프 ..... "LDAP bind authentication LDAP injection escape"
+//   - 암호학적 난수 RandomNumberGenerator vs Random ......... "cryptographically secure random C#"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 비밀번호를 어떻게 저장하나요?
+//       A. 원문은 저장하지 않고, 사람마다 다른 무작위 salt(16바이트)를 붙여 PBKDF2-SHA256으로 100,000번 반복한 해시(32바이트)만 저장합니다. 해시는 되돌릴 수 없고, salt 덕분에 같은 비밀번호도 해시가 달라 미리 계산한 표 공격이 어렵습니다. 반복 횟수는 무차별 대입을 느리게 만듭니다.
+//   Q2. 사원번호가 틀렸을 때와 비밀번호가 틀렸을 때 같은 문구를 쓰는 이유는요?
+//       A. 다르게 알려 주면 공격자가 "이 사원번호는 존재한다"는 정보를 얻어 그 계정만 집중 공격할 수 있습니다(계정 열거). 응답 "시간"도 같아야 해서, 없는 사원번호에도 가짜 해시로 같은 계산을 한 번 합니다.
+//   Q3. 로그인 실패 5회 잠금은 어떻게 구현했고, 동시에 여러 연결로 시도하면요?
+//       A. 실패 횟수와 잠금 시각은 DB에 두고, 실패 기록은 UPDATE 한 문장으로 원자적으로 처리합니다. 그래도 "잠금 확인 → 검증 → 실패 기록"이 한 덩어리가 아니면 연결 수십 개로 동시에 시도해 5번보다 훨씬 많이 추측할 수 있어서, 같은 사원번호는 lock으로 한 번에 하나씩 처리합니다.
+//   Q4. 사원번호마다 lock 객체를 만들지 않고 64개 배열을 쓰는 이유는요?
+//       A. 사원번호별로 lock 객체를 만들면 사용자가 늘수록 메모리가 계속 늘고 정리도 어렵습니다. 해시값을 64로 나눈 나머지로 고정된 64개 중 하나를 고르면(줄무늬 잠금) 메모리가 일정하고, 다른 사람과 같은 lock을 쓰더라도 잠깐 기다릴 뿐 결과는 틀리지 않습니다.
+//   Q5. 잠금 확인을 비밀번호 검증보다 먼저 하는 이유는요?
+//       A. 잠긴 동안에는 맞는 비밀번호를 넣어도 시도 자체가 막혀야 하기 때문입니다. 그렇지 않으면 잠금이 걸려도 공격자가 맞을 때까지 계속 추측할 수 있습니다.
+//   Q6. 계정 상태(정지·승인 대기)는 왜 비밀번호가 맞은 뒤에 알려 주나요?
+//       A. 비밀번호를 모르는 사람에게 "이 계정은 정지됐다" 같은 정보를 주지 않기 위해서입니다.
+//   Q7. 로그인 성공 기록을 Login 안에서 하지 않는 이유는요?
+//       A. 비밀번호가 맞아도 "이미 다른 곳에서 접속 중"이면 로그인이 거절될 수 있습니다. 세션 등록까지 성공한 뒤에 호출하는 쪽에서 성공을 기록해야 실패 횟수 초기화·마지막 로그인 시각이 정확합니다.
+//   Q8. LDAP 로그인은 어떻게 동작하나요? 사내 서버에 비밀번호를 보내도 안전한가요?
+//       A. 사용자 계정에 AuthSource가 "LDAP"이면 "사원번호@도메인" 형태로 LDAP 서버에 Bind(로그인)를 시도해서 성공 여부로 인증합니다. 암호화 없이 비밀번호를 보내면 위험하므로 SSL(LDAPS, 기본 포트 636)을 켠 연결만 사용합니다. 이 서버에는 비밀번호를 저장하지 않습니다.
+//   Q9. LDAP 조회에 사용자 입력을 넣을 때 주의할 점은요?
+//       A. LDAP 필터에 사원번호를 그대로 넣으면 *, (, ) 같은 문자로 검색 조건을 바꾸는 "LDAP 인젝션"이 가능합니다. 그래서 EscapeLdapFilter로 특수문자를 이스케이프하고, 속성 이름은 영문·숫자·하이픈만 허용(IsLdapAttributeName)합니다.
+//   Q10. 임시 비밀번호는 어떻게 만드나요? new Random()을 쓰면 안 되나요?
+//       A. 안 됩니다. Random은 시드를 알면 다음 값을 예측할 수 있습니다. 암호학적으로 안전한 RandomNumberGenerator로 헷갈리는 글자(0/O, 1/l/I)를 뺀 10자를 뽑고, 앞 두 글자를 영문·숫자로 고정해 비밀번호 규칙(영문+숫자)을 항상 만족시킵니다. 이 임시 비밀번호는 MustChangePassword로 다음 로그인 때 변경을 강제합니다.
+//   Q11. 이 방식의 한계는요? (솔직하게 답하기)
+//       A. (1) 같은 사원번호만 한 줄로 세우므로 공격자가 사원번호를 바꿔 가며 시도하는 "분산·사전 대입"은 IP 기준 제한 같은 다른 장치가 필요합니다(서버에는 IP별 연결 수 제한이 있음). (2) 잠금 시간 동안 정상 사용자가 로그인하지 못하는 서비스 거부(DoS) 가능성이 있습니다. (3) 비밀번호 규칙은 길이·영문·숫자 정도라 사전 단어를 막지는 못합니다.
+//
+// ■ 문제가 났을 때 어디를 볼까 (유지보수)
+//   - 맞는 비밀번호인데 로그인이 안 된다 ........ 잠금 중인지(LockMinutesLeft), AuthSource가 LDAP/LOCAL 중 무엇인지, Status가 ACTIVE인지
+//   - LDAP 로그인만 실패한다 .................... ServerConfig의 Ldap(Enabled, Server, Port 636, UserPrincipalNameSuffix), 서버 인증서·방화벽, 타임아웃(1~20초로 제한됨)
+//   - 가입이 "이미 가입된" 이라고 나온다 ......... UserRepository.TryInsert의 UNIQUE(사원번호·이메일·휴대폰) 충돌
+//   - 이메일 도메인 때문에 가입이 막힌다 ......... ServerConfig의 AnyEmailDomain/EmailDomains → 생성자에서 만든 정규식
+//   - 로그인이 가끔 오래 걸린다 ................. 같은 사원번호 동시 시도의 lock 대기, PBKDF2 계산 시간(약 0.1초), LDAP 서버 응답
+// ───────────────────────────────────────────────────────────────────────────
 
 /// <summary>
 /// 회원가입 / 로그인 규칙 (요구사항 AU-01 회원가입, AU-02 로그인, SC-02 로그인 실패 잠금).
@@ -187,18 +241,23 @@ public sealed class AuthService
         //      잠금(5회)이 걸리기 전에 5번보다 훨씬 많이 추측할 수 있다.
         // [개념] 줄무늬 잠금(lock striping): 사원번호마다 lock 객체를 만들면 메모리가 계속 늘어나므로,
         //      해시값으로 64개 중 하나를 골라 쓴다. 다른 사람끼리 같은 lock을 쓸 수도 있지만 잠깐 기다릴 뿐 틀리지는 않는다.
+        // [읽는 법] no.GetHashCode()는 음수가 될 수 있다. "& int.MaxValue"로 맨 앞 비트(부호)를 지워 항상 0 이상으로 만든 뒤 % 64로 0~63 중 하나를 고른다.
+        //           즉 "같은 사원번호 = 항상 같은 lock"이 보장된다. 주의: string.GetHashCode()는 프로그램을 다시 실행하면 값이 달라지지만, 한 번 실행되는 동안에는 같으므로 이 용도에는 충분하다.
         lock (LoginLocks[(no.GetHashCode() & int.MaxValue) % LoginLocks.Length])
             return LoginLocked(no, req, wrong);
     }
 
+    // [읽는 법] Enumerable.Range(0, 64)는 0~63의 숫자 64개. Select(_ => new object())로 각각 빈 객체(lock 열쇠)를 만들고 ToArray()로 배열을 만든다. 서버가 켜질 때 한 번 만들어 계속 쓴다.
     private static readonly object[] LoginLocks = Enumerable.Range(0, 64).Select(_ => new object()).ToArray();
 
     // 없는 사원번호일 때도 비밀번호 확인과 비슷한 시간을 쓰기 위한 가짜 해시 (서버 시작 때 1번 만든다)
+    // [읽는 법] 서버 시작 때 한 번 만들어 두는 "가짜" 해시. 없는 사원번호가 들어와도 PasswordHasher.Verify를 한 번 돌려서, 있는 사원번호일 때와 응답 시간을 비슷하게 맞춘다(타이밍 공격 대비).
     private static readonly (string Hash, string Salt) DummyHash = PasswordHasher.Hash("dummy-password-for-timing");
 
     private (UserInfo? User, string Message) LoginLocked(string no, LoginRequest req, string wrong)
     {
         // [개념] UserRecord? : 못 찾으면 null을 돌려준다.
+        // [읽는 법] DB의 users 한 행을 UserRecord(해시·salt·잠금 정보까지 포함한 "내부용" 객체)로 가져온다. 이 객체는 절대 클라이언트로 내보내지 않는다 — 아래에서 UserInfo로 바꿔서 보낸다.
         UserRecord? user = _users.FindByEmployeeNo(no);
         if (user is null)
         {
@@ -214,6 +273,8 @@ public sealed class AuthService
             return (null, $"로그인 시도 횟수를 초과했습니다. {user.LockMinutesLeft}분 후 다시 시도하세요.");
 
         LdapProfile? ldapProfile = null;
+        // [읽는 법] 삼항 연산자 두 겹: LDAP 계정이면 사내 LDAP 서버에 확인 → 아니면(LOCAL이고 해시·salt가 DB에 있을 때만) PBKDF2 해시를 비교한다. 둘 다 아니면(예: 해시가 없는 계정) false라서 로그인이 거절된다.
+        //           out ldapProfile: LDAP 인증에 성공하면 이름·부서·직급 같은 프로필 정보도 함께 돌려받는 출구 매개변수다.
         bool authenticated = user.AuthSource == "LDAP"
             ? VerifyLdap(user.EmployeeNo, req.Password, out ldapProfile)
             : user.AuthSource == "LOCAL" && user.PasswordHash is not null && user.Salt is not null
@@ -221,6 +282,7 @@ public sealed class AuthService
         if (!authenticated)
         {
             // 실패 횟수 +1, 한도에 도달하면 잠금 시각 설정 (UserRepository에서 UPDATE 한 문장으로 원자적으로 처리)
+            // [읽는 법] DB에서 "실패 횟수 +1, 한도(기본 5회)에 닿으면 잠금 시각 = 지금 + 잠금 분(기본 10분)"을 한 문장의 UPDATE로 처리한다. 읽고 → 더하고 → 쓰는 세 동작이 아니라 한 문장이라 동시에 실패해도 횟수가 틀어지지 않는다.
             _users.RecordLoginFailure(no, _config.MaxLoginAttempts, _config.LockMinutes);
             return (null, wrong);
         }
@@ -235,6 +297,7 @@ public sealed class AuthService
             case "RESIGNED": return (null, "사용할 수 없는 계정입니다.");
         }
 
+        // [읽는 법] LDAP 로그인에 성공했고 프로필을 받았다면 이름·부서·직급을 DB에 동기화하고, 갱신된 행을 다시 읽는다(?? user = 못 읽으면 기존 값 사용). 단, 계정을 새로 만들거나 권한을 주지는 않는다 — 이미 DB에 있는 사용자만 대상이다.
         if (ldapProfile is not null)
         {
             _users.UpdateLdapProfile(user.EmployeeNo, ldapProfile.Name, ldapProfile.Department, ldapProfile.Position);
@@ -243,6 +306,7 @@ public sealed class AuthService
 
         // [왜] DB 행(UserRecord)에는 비밀번호 해시·salt가 있으므로 그대로 보내면 안 된다.
         //   화면에 필요한 정보만 담은 UserInfo로 옮겨서 클라이언트에 보낸다(민감 정보 노출 방지).
+        // [읽는 법] UserRecord(내부용) → UserInfo(화면용) 변환. 상태 메시지·임시 비밀번호 여부·사진 버전을 DB에서 함께 채운다. TryLoad~ 형태 함수는 DB 칸이 없거나 실패해도 예외 대신 기본값을 돌려주는 "안전한 읽기"다.
         var info = new UserInfo
         {
             EmployeeNo = user.EmployeeNo,
@@ -260,6 +324,9 @@ public sealed class AuthService
 
     private sealed record LdapProfile(string? Name, string? Department, string? Position);
 
+    // [전체 흐름] ① 설정 확인(꺼져 있거나 서버·도메인 없음 → false) ② LDAPS 연결 만들기(포트, 타임아웃 1~20초로 제한) ③ connection.Bind() = 사용자 계정으로 로그인 시도(성공하면 비밀번호가 맞은 것)
+    //             ④ (설정했다면) 같은 연결로 이름·부서·직급 조회 — 이 조회가 실패해도 로그인 성공은 그대로 유지(프로필은 "있으면 좋은" 정보라서)
+    //             ⑤ 네트워크·LDAP 오류는 false로 처리해 로그인 실패로 보이게 한다(서버가 죽지 않는다).
     private bool VerifyLdap(string employeeNo, string password, out LdapProfile? profile)
     {
         profile = null;
@@ -273,6 +340,7 @@ public sealed class AuthService
                 new NetworkCredential($"{employeeNo}@{ldap.UserPrincipalNameSuffix.TrimStart('@')}", password), AuthType.Basic);
             connection.Timeout = TimeSpan.FromSeconds(Math.Clamp(ldap.TimeoutSeconds, 1, 20));
             connection.SessionOptions.ProtocolVersion = 3;
+            // [왜] 이 연결로 사용자의 비밀번호가 지나간다. SSL(LDAPS)을 켜서 암호화하지 않으면 사내망이라도 중간에서 엿볼 수 있다. AuthType.Basic은 비밀번호를 그대로 보내므로 반드시 암호화 연결과 함께 써야 한다.
             connection.SessionOptions.SecureSocketLayer = true;
             connection.Bind();
             if (!string.IsNullOrWhiteSpace(ldap.ProfileBaseDn) && IsLdapAttributeName(ldap.EmployeeNumberAttribute))
@@ -282,7 +350,9 @@ public sealed class AuthService
                     string[] attributes = new[] { ldap.DisplayNameAttribute, ldap.DepartmentAttribute, ldap.PositionAttribute }
                         .Where(IsLdapAttributeName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
                     var search = new System.DirectoryServices.Protocols.SearchRequest(ldap.ProfileBaseDn,
+                        // [왜] LDAP 필터 문자열에 사용자 입력을 끼워 넣을 때는 반드시 이스케이프한다(SQL 인젝션과 같은 원리). 속성 이름은 설정값이지만 IsLdapAttributeName으로 한 번 더 검사해 필터 문법이 깨지지 않게 막는다.
                         $"({ldap.EmployeeNumberAttribute}={EscapeLdapFilter(employeeNo)})", SearchScope.Subtree, attributes);
+                    // [읽는 법] "is SearchResponse { Entries.Count: > 0 } response" = 응답이 SearchResponse 형식이고 결과가 1개 이상일 때만 response 변수에 담고 들어간다(속성 패턴). 결과가 없으면 조용히 건너뛴다.
                     if (connection.SendRequest(search) is SearchResponse { Entries.Count: > 0 } response)
                     {
                         SearchResultEntry entry = response.Entries[0];
@@ -290,6 +360,7 @@ public sealed class AuthService
                             ReadLdapValue(entry, ldap.DepartmentAttribute), ReadLdapValue(entry, ldap.PositionAttribute));
                     }
                 }
+                // [읽는 법] 프로필 조회가 실패해도 이미 비밀번호 확인은 끝났으므로 로그인 자체는 성공으로 둔다(주석: Profile reads are optional). "when (...)" 예외 필터는 예상한 종류의 예외만 잡고, 나머지(버그)는 그대로 위로 올려 숨기지 않는다.
                 catch (Exception ex) when (ex is LdapException or DirectoryOperationException or TimeoutException)
                 {
                     // Profile reads are optional: successful password verification remains authoritative.
@@ -303,9 +374,11 @@ public sealed class AuthService
         }
     }
 
+    // [읽는 법] 속성 이름이 "비어 있지 않고 64자 이하이며 영문·숫자·하이픈만"인지 검사한다. { Length: > 0 and <= 64 }는 속성 패턴으로, null이면 자동으로 거짓이 되어 별도의 null 검사가 필요 없다.
     private static bool IsLdapAttributeName(string? value)
         => value is { Length: > 0 and <= 64 } && value.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
 
+    // [읽는 법] LDAP 필터에서 특별한 뜻을 갖는 문자(\ * ( ) 그리고 널 문자)를 "\숫자" 형태의 안전한 표기로 바꾼다. 가장 먼저 역슬래시를 바꾸는 이유: 나중에 바꾸면 방금 만든 "\28" 같은 표기의 역슬래시를 또 바꿔 버리기 때문이다.
     private static string EscapeLdapFilter(string value)
         => value.Replace("\\", "\\5c", StringComparison.Ordinal).Replace("*", "\\2a", StringComparison.Ordinal)
             .Replace("(", "\\28", StringComparison.Ordinal).Replace(")", "\\29", StringComparison.Ordinal)
@@ -327,6 +400,8 @@ public sealed class AuthService
     /// </summary>
     // [왜] 로그인한 상태여도 "현재 비밀번호"를 다시 묻는다: 잠깐 자리를 비운 사이 다른 사람이 내 PC에서
     //      비밀번호를 바꿔 계정을 빼앗는 일을 막기 위해서다(대부분의 서비스가 이렇게 한다).
+    // [검사 순서] 계정 확인 → 현재 비밀번호 확인 → 새 비밀번호 규칙 → 현재와 같은지 → 새 해시를 만들어 저장(mustChange: false = 임시 상태 해제).
+    //             LDAP 계정은 이 서버에 비밀번호 해시가 없으므로 첫 검사에서 "바꿀 수 없는 계정"으로 막힌다(비밀번호 관리는 사내 LDAP 쪽).
     public (bool Success, string Message) ChangePassword(string employeeNo, ChangePasswordRequest req)
     {
         UserRecord? user = _users.FindByEmployeeNo(employeeNo);
@@ -348,6 +423,7 @@ public sealed class AuthService
     /// <summary>
     /// 관리자의 비밀번호 초기화: 임시 비밀번호를 만들어 저장하고(다음 로그인 때 변경 필수) 그 값을 돌려준다.
     /// </summary>
+    // [읽는 법] 관리자가 호출한다. 임시 비밀번호를 만들어 해시로 저장하고(mustChange: true) 원문은 관리자에게 한 번 돌려준다 — 서버에는 원문이 남지 않는다. 저장에 실패하면 null이라 호출한 쪽이 "초기화 실패"를 안다.
     public string? ResetPassword(string employeeNo)
     {
         string temp = CreateTempPassword();
@@ -362,6 +438,8 @@ public sealed class AuthService
         const string letters = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
         const string digits = "23456789";
         const string all = letters + digits;
+        // [개념] stackalloc: 힙(가비지 컬렉션 대상)이 아니라 "스택"에 잠깐 쓰는 작은 배열을 만든다. 10글자짜리라 크기가 작고, 함수가 끝나면 자동으로 사라져 쓰레기가 남지 않는다. Span<char>는 그 메모리를 안전하게 다루는 창이다.
+        //        RandomNumberGenerator.GetInt32(n)은 0~n-1 사이의 "예측할 수 없는" 난수를 준다.
         Span<char> chars = stackalloc char[10];
         for (int i = 0; i < chars.Length; i++) chars[i] = all[RandomNumberGenerator.GetInt32(all.Length)];
         // 비밀번호 규칙(영문+숫자 포함)을 반드시 만족하도록 앞 두 글자를 고정 종류로

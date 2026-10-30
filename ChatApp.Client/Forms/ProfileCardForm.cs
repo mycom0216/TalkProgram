@@ -13,8 +13,48 @@ namespace ChatApp.Client.Forms;
 // - 배경 사진은 이 창을 열 때만 받아 온다(AvatarCache.NoteBackground). 받으면 Changed로 다시 그린다.
 // - 스레드: 모두 UI 스레드.
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   프로필 카드 창. 컨트롤을 쌓는 대신 OnPaint에서 배경·사진·글자를 직접 그리고, 버튼 두 개(아래 막대)만 진짜 컨트롤이다. 이 창은 "무엇을 하고 싶은지"를 ActionRequested 이벤트로 알리기만 하고, 파일 고르기·서버 전송은 메인 창이 한다.
+//
+// ■ 구조
+//   - 표시: 같은 폼을 "내 카드(_isMe)"와 "남의 카드"로 나눠 쓴다. 버튼 글자·동작이 UpdateButtons/클릭 핸들러에서 갈린다.
+//       내 카드: [상태 메시지] [프로필 편집 ▾] + 사진 클릭 = 사진 바꾸기, 왼쪽 위 알약 = 배경 바꾸기
+//       남의 카드: [1:1 채팅] [친구 추가/삭제]
+//   - 그리기 순서(OnPaint): ① 배경(사진 or 그라데이션) ② 아래쪽 어둡게(글자 가독성) ③ 둥근 사각형 사진 + 접속 점/카메라 표시 ④ 이름·상태 메시지·부서 ⑤ 배경 바꾸기 알약
+//   - 상호작용: 그릴 때 저장해 둔 사각형(_avatarRect, _backgroundPill)과 마우스 위치를 비교(히트 테스트)해서 클릭/커서 모양을 정한다.
+//   - 갱신: 메인 창이 UpdateUser로 새 정보를 넘기거나, AvatarCache.Changed(사진이 도착함) 이벤트가 오면 Invalidate()로 다시 그린다.
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 이벤트로 "의도"만 알리고 처리는 바깥에서(느슨한 결합) ... "event callback decoupling UI from logic"
+//   - 직접 그리기(OnPaint, DoubleBuffered) .................... "WinForms OnPaint custom drawing DoubleBuffered"
+//   - GraphicsPath로 둥근 사각형 + 클리핑(SetClip) ............. "GraphicsPath rounded rectangle SetClip DrawImage"
+//   - 알파 그라데이션으로 글자 뒤 어둡게 ....................... "LinearGradientBrush alpha overlay text readability"
+//   - GDI+ 객체 수명(Font/Brush/Pen의 Dispose) ................ "GDI+ Dispose using Font Brush Pen leak"
+//   - 사진 캐시와 변경 알림(AvatarCache.Changed) ............... "image cache change notification invalidate"
+//   - 히트 테스트 ............................................ "hit test rectangle mouse click custom control"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 프로필 사진을 바꾸는 코드가 왜 이 창에 없나요?
+//       A. 이 창은 화면 담당이라 "사진 바꾸기를 눌렀다"는 사실만 ActionRequested로 알립니다. 파일 선택·크기 검사·서버 전송은 메인 창이 하므로, 같은 동작을 다른 곳(친구 목록의 내 프로필 등)에서도 재사용할 수 있고 이 창은 서버를 몰라도 됩니다.
+//   Q2. 사진이 나중에 도착하면 화면은 어떻게 바뀌나요?
+//       A. AvatarCache가 사진을 받으면 Changed 이벤트를 올리고, 이 창은 구독해 두었다가 Invalidate()로 다시 그립니다. 창이 닫히면 구독을 해제(-=)해서 닫힌 창이 이벤트를 받지 않게 합니다.
+//   Q3. 직접 그리는 코드에서 메모리 누수를 어떻게 막았나요?
+//       A. 한 번만 쓰는 Brush/Pen/Path는 using으로 그때그때 해제하고, 계속 쓰는 글꼴 4개는 필드로 한 번 만들어 FormClosed에서 해제합니다. (그리기마다 new Font를 만들면 GDI 핸들이 쌓입니다.)
+//   Q4. 흰 글자가 밝은 사진 위에서도 읽히게 한 방법은요?
+//       A. 아래쪽 3/5 영역에 투명→반투명 검정 그라데이션을 덧그려서 사진과 상관없이 글자 뒤가 어둡게 합니다.
+//
+// ■ 알아 둘 점 (코드는 바꾸지 않음)
+//   - 아래 버튼 두 개에 넣는 글꼴(new Font(Font, Bold))은 폼이 닫힐 때 해제 목록에 없다. 두 개뿐이고 GC가 정리하므로 큰 문제는 아니지만, 위 글꼴들처럼 맞추면 일관된다.
+//   - 고정 크기(340×520, FixedSingle)라 글자가 매우 길면 말줄임(EndEllipsis)으로 잘린다 — 의도된 동작.
+//   - 인터넷에서 받은 사진은 AvatarCache가 크기/형식 검사를 하고 이 창은 그리기만 한다(검사 책임이 이 파일에는 없음).
+// ───────────────────────────────────────────────────────────────────────────
 
 /// <summary>프로필 카드에서 누른 동작.</summary>
+// [읽는 법] 카드에서 가능한 "하고 싶은 일" 목록. 메인 창이 switch로 받아 실제 처리를 연결한다(이 창은 처리하지 않는다).
 internal enum ProfileAction
 {
     Chat,
@@ -41,6 +81,7 @@ internal sealed class ProfileCardForm : Form
     private Rectangle _avatarRect, _backgroundPill;
 
     /// <summary>카드에서 고른 동작 (메인 창이 처리한다).</summary>
+    // [개념] 이벤트 + Action<…> 대리자: "누가 구독하든 상관없이 알리기만" 한다. ?는 구독자가 없을 수 있다는 뜻이라 호출할 때 ?.Invoke를 쓴다.
     public event Action<ProfileAction, UserInfo>? ActionRequested;
 
     /// <summary>지금 보여 주는 사람의 사원번호.</summary>
@@ -62,6 +103,7 @@ internal sealed class ProfileCardForm : Form
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
         BackColor = Color.FromArgb(28, 28, 30);
+        // [왜] OnPaint에서 배경·사진·글자를 겹쳐 그리므로, 이중 버퍼링으로 메모리에 완성본을 만든 뒤 한 번에 화면에 올려 깜빡임을 없앤다.
         DoubleBuffered = true;
         KeyPreview = true;
         ClientSize = LogicalToDeviceUnits(new Size(340, 520));
@@ -114,6 +156,7 @@ internal sealed class ProfileCardForm : Form
         _editMenu.Items.Add("상태 메시지 바꾸기...", null, (_, _) => Request(ProfileAction.ChangeStatusMessage));
 
         UpdateButtons();
+        // [읽는 법] "이 사람 배경 사진이 필요하다"고 캐시에 알린다. 이미 있으면 그대로, 없으면 받아 온 뒤 Changed가 올라와 다시 그린다. 배경 사진은 용량이 커서 카드를 열 때만 받는다.
         _avatars.NoteBackground(user); // 배경 사진은 카드를 열 때만 받아 온다
         _avatars.Changed += OnPhotosChanged;
         FormClosed += (_, _) =>
@@ -129,6 +172,7 @@ internal sealed class ProfileCardForm : Form
     }
 
     /// <summary>열려 있는 동안 상대 정보(상태 메시지·사진 버전·친구 여부)가 바뀌면 메인 창이 불러 준다.</summary>
+    // [왜] 카드를 열어 둔 사이 상대가 상태 메시지를 바꾸거나 친구 관계/접속 상태가 달라질 수 있다. 메인 창이 알려 주면 값만 바꾸고 Invalidate()로 다시 그린다.
     public void UpdateUser(UserInfo user, bool isFriend, bool online)
     {
         _user = user;
@@ -154,6 +198,7 @@ internal sealed class ProfileCardForm : Form
 
     // ───────── 그리기 ─────────
 
+    // [읽는 법] 아래 ①~⑤ 순서가 곧 "아래층 → 위층" 그리는 순서다(나중에 그린 것이 위에 보임). 사진/알약의 사각형은 그리는 김에 필드에 저장해 마우스 처리에서 재사용한다.
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
@@ -168,6 +213,7 @@ internal sealed class ProfileCardForm : Form
         }
         else
         {
+            // [왜] 배경 사진이 없어도 허전하지 않게, 사람마다 정해진 색(AvatarColor)에서 하늘색으로 내려가는 그라데이션을 쓴다. 같은 사람은 항상 같은 색이라 알아보기 쉽다.
             Color top = ControlPaint.Dark(Theme.AvatarColor(_user.EmployeeNo), 0.1f);
             using var gradient = new LinearGradientBrush(area, top, Theme.SkyDark, LinearGradientMode.Vertical);
             g.FillRectangle(gradient, area);
@@ -229,6 +275,7 @@ internal sealed class ProfileCardForm : Form
         if (_avatars.Get(_user.EmployeeNo) is { } photo)
         {
             GraphicsState state = g.Save();
+            // [개념] 클리핑: 둥근 사각형 안쪽에만 그려지게 제한한 뒤 사진을 그리면 모서리가 둥글게 잘린다. Save/Restore로 다른 그리기에 클리핑이 번지지 않게 되돌린다.
             g.SetClip(path);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
             g.DrawImage(photo, r);
@@ -257,6 +304,7 @@ internal sealed class ProfileCardForm : Form
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
     }
 
+    // [읽는 법] 네 모서리에 호(Arc)를 하나씩 이어 붙여 둥근 사각형 경로를 만든다. 각도(180·270·0·90)는 왼위 → 오른위 → 오른아래 → 왼아래 순서. 반환한 경로는 호출한 쪽이 using으로 해제한다.
     private static GraphicsPath Rounded(Rectangle r, int radius)
     {
         int d = Math.Max(1, radius * 2);
@@ -277,6 +325,7 @@ internal sealed class ProfileCardForm : Form
         Cursor = _isMe && (_avatarRect.Contains(e.Location) || _backgroundPill.Contains(e.Location)) ? Cursors.Hand : Cursors.Default;
     }
 
+    // [읽는 법] 남의 카드는 사진을 눌러도 아무 일도 없다(_isMe가 아니면 return). 내 카드에서만 왼쪽 클릭의 위치로 "사진 바꾸기"/"배경 바꾸기"를 가른다.
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);

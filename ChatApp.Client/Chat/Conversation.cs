@@ -12,6 +12,52 @@ namespace ChatApp.Client.Chat;
 //   - 창을 X로 닫아도 대화 내용은 메인 창의 Conversation에 남아, 다시 열면 그대로 보인다.
 //   - 창이 닫혀 있을 때 온 메시지도 Conversation에 쌓이고 안 읽은 수(Unread)가 올라간다.
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   대화 하나(방 또는 1:1)의 "데이터 쪽 주인". 말풍선 목록, 안 읽은 수, 읽음 위치, 지난 대화 합치기, 댓글 수를 맡고, 바뀔 때마다 이벤트로 열려 있는 창에 알린다.
+//
+// ■ 읽는 순서
+//   ① Key/Items/Unread → ② 이벤트 4개(ItemAdded, ItemChanged, ReadStateChanged, Reloaded) → ③ Add → ④ 댓글(RecountReplies, GetThread)
+//   → ⑤ 지난 대화(InsertHistory, DedupKey) → ⑥ RoomKey/DirectKey
+//
+// ■ 이벤트 구분 (어느 이벤트가 언제 나가는가)
+//   ItemAdded ........ 새 말풍선 1개 끝에 추가 → 창이 아래에 붙여 그림
+//   ItemChanged ...... 이미 있는 말풍선의 내용만 바뀜(진행률, 댓글 수) → 창이 그 부분만 다시 그림
+//   ReadStateChanged . 읽음 숫자("1")가 여러 개 한꺼번에 바뀜 → 다시 그리기만
+//   Reloaded ......... 목록 중간/앞에 끼워 넣음 → 창이 전체를 다시 배치
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 옵저버 패턴(event/델리게이트), 구독 해제 ...... "observer pattern C# event unsubscribe memory leak"
+//   - 데이터와 화면 분리(Model-View) ................ "separate model and view WinForms"
+//   - 중복 제거(HashSet, DistinctBy, 중복 키) ....... "deduplicate with HashSet composite key"
+//   - 두 정렬 목록 병합(merge) ...................... "merge two sorted lists"
+//   - 안정 정렬(OrderBy는 같은 값의 순서를 유지) ..... "stable sort LINQ OrderBy"
+//   - 커서 기반 페이지 불러오기(더 오래된 것) ........ "cursor pagination chat history"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 대화 데이터를 창(ChatWindow)이 아니라 Conversation에 둔 이유는요?
+//       A. 창을 X로 닫아도 대화 내용이 남아 다시 열면 그대로 보이고, 창이 닫혀 있을 때 온 메시지도 쌓이면서 안 읽은 수가 올라야 하기 때문입니다. 데이터(Model)와 화면(View)을 분리한 가장 단순한 형태입니다.
+//   Q2. 지난 대화를 합칠 때 같은 메시지가 두 번 보이지 않게 한 방법은요?
+//       A. 서버 메시지 번호가 있으면 "id:번호"로, 파일은 "file:파일번호"로, 번호가 없는 옛 기록은 "보낸 사람|내용|밀리초 시각"으로 비교하는 DedupKey를 만들어 HashSet에 담고, 이미 있는 것은 버립니다. 들어온 묶음 안의 중복은 DistinctBy로 먼저 제거합니다. 시각을 밀리초까지만 비교하는 이유는 DB(DATETIME(3))가 밀리초까지만 저장하기 때문입니다.
+//   Q3. 지난 대화는 어떻게 시간 순서대로 끼워 넣나요?
+//       A. 이미 있는 목록(Items)과 새 기록(fresh, 시각순 정렬)이 둘 다 정렬되어 있으므로 병합 정렬의 병합 단계처럼 앞에서부터 비교하며 섞습니다. 처음 불러올 때는 모두 지금 대화보다 앞에 들어가고, 자동 재접속 뒤의 기록은 끊김 알림과 재연결 알림 사이로 들어갑니다. 한 번에 합친 뒤 Reloaded를 한 번만 발생시켜 창이 한 번만 다시 그립니다.
+//   Q4. 이미 화면에 있는 메시지가 다시 들어오면 그냥 버리나요?
+//       A. 버리기 전에 최신 상태로 맞춥니다. 끊겨 있던 동안 삭제되었거나 수정되었거나 공감이 바뀌었을 수 있기 때문입니다(Deleted, Edited, Text, Reactions를 갱신).
+//   Q5. 댓글 수는 서버에 묻지 않고 왜 클라이언트에서 세나요?
+//       A. 불러온 범위가 항상 "어느 시점부터 지금까지"라서 원래 메시지가 보이면 그 뒤에 달린 댓글도 모두 불러와져 있습니다. 서버 왕복 없이 정확히 셀 수 있습니다. 한계: 원래 메시지가 보이지만 댓글이 범위 밖인 경우는 없다는 전제에 의존합니다.
+//   Q6. 한계는요? (솔직하게 답하기)
+//       A. (1) 서버 시각과 이 PC에서 만든 알림의 시각을 비교해 위치를 정하므로 PC 시계가 크게 틀리면 알림 위치가 조금 어긋난다. (2) Items가 List라서 FindMessage가 O(n)이다(최근부터 찾아 보통 빠르지만 아주 긴 대화에서는 메시지 번호 사전을 두는 편이 낫다). (3) Items를 바깥에서 직접 바꾸면 이벤트가 나가지 않는다 — Add/InsertHistory로만 바꾸는 규칙에 의존한다.
+//
+// ■ 문제가 났을 때 어디를 볼까
+//   - 같은 메시지가 두 번 보인다 ............ DedupKey가 서로 다르게 만들어지는지(시각 밀리초, 메시지 번호 유무)
+//   - 지난 대화가 중간에 끼어 어긋난다 ....... InsertHistory의 병합 비교(시각 Time), PC 시계 차이
+//   - 읽음 "1"이 안 사라진다 ................ PeerLastReadAt 갱신, LatestMessageTime에서 올리는 중인 파일이 빠지는지
+//   - 댓글 수가 틀린다 ...................... RecountReplies가 불렸는지(지난 대화 삽입 후, 댓글 삭제 후)
+//   - 창이 닫힌 뒤에도 메모리가 줄지 않는다 .. ItemAdded/ItemChanged를 -=로 해제했는지(ChatWindow)
+// ───────────────────────────────────────────────────────────────────────────
 
 /// <summary>
 /// 대화 하나(채팅방 또는 1:1)의 메시지 보관함.
@@ -43,6 +89,7 @@ internal sealed class Conversation(string key, string title)
     /// 서버가 시각을 매긴 메시지 중 가장 마지막 것의 시각 (읽음 표시 기준).
     /// [주의] 아직 올리는 중인 내 파일 말풍선은 이 PC의 시계로 시각이 찍혀 있어 뺀다(PC 시계가 빠르면 읽음 위치가 앞서 나간다).
     /// </summary>
+    // [읽는 법] 뒤에서부터 훑어 "읽음 기준이 될 마지막 메시지"를 찾는다. 시스템 알림은 건너뛰고, 아직 올리는 중인 내 파일(MessageId == 0이고 Ready가 아님)도 건너뛴다 — 그 말풍선의 시각은 서버가 아니라 이 PC 시계라서 읽음 위치를 앞서 보내기 때문이다.
     public DateTime? LatestMessageTime
     {
         get
@@ -184,6 +231,7 @@ internal sealed class Conversation(string key, string title)
 
         // [개념] LINQ Where: 조건에 맞는 것만 골라낸다. 여기서는 "아직 화면에 없는 기록"만 남긴다.
         // 들어온 묶음 안의 중복(재접속으로 같은 기록을 두 번 받은 경우)도 하나만 남긴다
+        // [읽는 법] 한 줄에 세 단계: ① DistinctBy: 들어온 묶음 안의 중복 제거 ② Where: 이미 화면에 있는 것 제거 ③ ToList: 목록으로 확정(이후 반복해서 쓰므로 지연 평가를 끝낸다).
         List<ChatItem> fresh = history.DistinctBy(DedupKey).Where(h => !existing.Contains(DedupKey(h))).ToList();
         if (fresh.Count == 0)
         {
@@ -214,6 +262,7 @@ internal sealed class Conversation(string key, string title)
 
         Items.Clear();
         Items.AddRange(merged);
+        // [읽는 법] 합친 직후에는 창이 곧 Reloaded로 전체를 다시 그리므로, 댓글 수가 바뀐 말풍선마다 알리지(notify) 않는다 → 불필요한 다시 그리기를 줄인다.
         RecountReplies(notify: false); // 지난 대화 속 댓글까지 세고, 창은 아래 Reloaded로 한꺼번에 다시 그린다
         Reloaded?.Invoke();
         return fresh.Count;

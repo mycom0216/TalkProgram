@@ -14,6 +14,54 @@ namespace ChatApp.Server.Services;
 // [스레드]   각 세션의 수신 스레드에서 동시에 호출된다(병렬 처리).
 //            공유 상태는 SessionManager·RoomManager(스레드 안전)와 DB를 통해서만 건드린다.
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   서버로 들어온 모든 패킷이 거치는 "접수 창구". 종류(PacketType)를 보고 알맞은 담당(서비스)에게 넘기고, 회원·관리자 처리는 이 파일이 직접 한다.
+//
+// ■ 담당 나누기 (switch가 하는 일)
+//   회원(가입·로그인·비밀번호·상태) = 이 파일 / 방 = RoomService / 메시지 = MessageService / 친구·휴대폰 = FriendService
+//   프로필 사진 = ProfileService / 파일 = FileService / 관리자 = AdminService(이 파일의 HandleAdmin이 권한 확인 후 호출)
+//
+// ■ Handle()의 순서
+//   ① 로그인 전이면 허용 목록(안내·가입·로그인·핑) 밖의 패킷을 거절  ② 임시 비밀번호 상태면 비밀번호 변경·핑·로그아웃만 허용
+//   ③ switch로 담당에게 전달  ④ DB 오류(DbException)는 여기서 잡아 "DB 오류" 응답을 보내고, 서버와 다른 사용자는 계속 동작
+//
+// ■ 로그인 흐름 (면접 단골 · HandleLogin)
+//   이미 로그인? → 요청 해석 → 프로토콜 버전 확인 → (LDAP 계정은 TLS 필요) → IP 속도 제한 → AuthService.Login(비밀번호 확인, 연속 5회 실패 시 10분 잠금: 설정 MaxLoginAttempts·LockMinutes)
+//   → SessionManager.Login(같은 계정이 이미 있으면 새 로그인이 이기고 이전 연결을 끊음) → 계정 활성 재확인 → (임시 비밀번호면 변경 대기)
+//   → (TLS + 로컬 계정이면 자동 로그인 토큰 발급) → LoginRes 전송 → CompleteLogin(내 방 복원, 안 읽은 1:1 알림, 접속자·방 목록 방송)
+//
+// ■ 새 기능(패킷)을 추가할 때 손댈 곳 (유지보수 순서)
+//   ① Common의 PacketType에 이름 추가 → ② 클라이언트가 그 패킷을 보냄 → ③ 이 파일 switch에 case 한 줄 → ④ 담당 서비스에 Handle 메서드
+//   → ⑤ 응답 패킷을 보냄 → ⑥ 클라이언트 MainForm.HandlePacket에 case 추가.  case를 빠뜨리면 "지원하지 않는 요청" 오류가 난다.
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 로그인 전에 허용하는 패킷을 왜 제한하나요?
+//       A. 클라이언트 화면에서만 막으면 수정한 클라이언트로 우회할 수 있습니다. 서버가 "로그인 안 한 사람은 가입·로그인·핑만"이라고 직접 막아야 진짜 보안입니다.
+//   Q2. 관리자 기능은 어떻게 권한을 지키나요?
+//       A. 클라이언트가 메뉴를 숨기는 건 편의일 뿐입니다. 관리 요청이 올 때마다 서버가 session.User.IsAdmin을 다시 확인하고, 아니면 거절과 함께 감사 로그(Denied)를 남깁니다.
+//   Q3. 접속자 목록을 왜 바로 안 보내고 0.2초 타이머로 묶나요?
+//       A. 한 명이 들어올 때마다 전체에게 목록을 보내면 데이터가 접속자 수의 세제곱에 비례해 늘어납니다(300명 부하 테스트에서 로그인 27초). "바뀌었다"는 표시만 해 두고 0.2초마다 한 번만 방송하도록 바꿨습니다.
+//   Q4. 같은 계정으로 두 번 로그인하면요?
+//       A. 새 로그인이 이깁니다. 이전 연결에는 ForceLogout을 보내고 닫으며, 방 연결은 TransferMembership으로 새 연결에 옮겨서 "나갔습니다" 알림이 뜨지 않게 했습니다.
+//   Q5. DB가 꺼지면 서버는 어떻게 되나요?
+//       A. DbException을 Handle()에서 잡아 해당 요청에만 실패 응답을 보냅니다. 서버와 다른 사용자의 채팅은 계속 됩니다.
+//   Q6. 로그인 속도 제한과 계정 잠금은 뭐가 다른가요?
+//       A. 계정 잠금은 "사원번호 하나"를 연속 5회 실패(기본값, 10분 잠금)로 보호하고, 속도 제한은 "한 IP가 여러 사원번호를 돌아가며 찔러 보는 것"을 늦춥니다. 서로 다른 공격을 막습니다.
+//   Q7. 이 클래스는 스레드에 안전한가요?
+//       A. Handle()은 여러 사람의 수신 스레드에서 동시에 호출됩니다. 그래서 이 클래스는 자기 상태를 거의 갖지 않고, 공유 데이터는 SessionManager·RoomManager(lock)와 DB를 통해서만 바꿉니다.
+//   Q8. 자동 로그인(토큰)은 안전한가요?
+//       A. TLS 연결에서만 발급·사용하고, 기기별 deviceId와 30일 만료를 둡니다. 비밀번호를 바꾸거나 재설정하면 서버가 기존 토큰을 모두 지웁니다(DB에는 원문이 아닌 해시 token_hash만 저장). LDAP 계정에는 토큰을 주지 않고 매번 디렉터리 인증을 합니다.
+//
+// ■ 문제가 났을 때 어디를 볼까 (유지보수)
+//   - 로그인이 안 된다 ............... HandleLogin의 순서대로(버전 → 속도 제한 → AuthService.Login). 서버 로그의 "로그인 실패 ... - 사유"
+//   - "지원하지 않는 요청" 오류 ...... Handle()의 switch에 case가 빠졌는지
+//   - 목록이 0.2초쯤 늦게 갱신된다 ... 정상(FlushLists의 묶음 방송)
+//   - 관리자 기능이 거절된다 .......... HandleAdmin의 IsAdmin 확인, 감사 로그의 Denied 기록
+// ───────────────────────────────────────────────────────────────────────────
 public sealed class PacketHandler
 {
     private readonly SessionManager _sessions;
@@ -74,6 +122,8 @@ public sealed class PacketHandler
 
         try
         {
+            // [읽는 법] 이 switch는 "이 종류의 패킷은 이 담당에게"라는 안내표다. 각 줄은 담당 서비스의 메서드를 부르기만 하고,
+            //           실제 일은 그 서비스에서 한다. 새 기능을 만들면 여기에 case를 한 줄 더하면 된다.
             switch (packet.Type)
             {
                 // 회원
@@ -235,6 +285,7 @@ public sealed class PacketHandler
             return;
         }
 
+        // [왜] LDAP 계정은 사내 디렉터리의 비밀번호를 그대로 쓴다. 암호화되지 않은 연결로 받으면 그 비밀번호가 노출되므로 TLS일 때만 허용한다.
         if (_users.FindByEmployeeNo(req.EmployeeNo.Trim()) is { AuthSource: "LDAP" } && !session.IsTls)
         {
             session.Send(Packet.Create(PacketType.LoginRes, "LDAP 계정 로그인은 클라이언트와 서버 사이 TLS 연결이 필요합니다.", success: false));
@@ -249,6 +300,7 @@ public sealed class PacketHandler
             return;
         }
 
+        // [흐름] 비밀번호 확인은 AuthService가 한다(해시 비교, 5회 실패 잠금, 정지·승인 대기 확인). 이 파일은 그 결과(user가 null인지)로 분기만 한다.
         var (user, message) = _auth.Login(req);
         if (user is null)
         {
@@ -261,6 +313,8 @@ public sealed class PacketHandler
         }
 
         // 같은 사원번호의 이전 연결이 있으면 새 로그인이 이긴다 (자동 재접속, 다른 PC에서 로그인)
+        // [개념] SessionManager.Login은 "사원번호 → 세션" 장부에 등록하고, 같은 사원번호의 이전 세션이 있으면 돌려준다(old).
+        //        old가 있다 = 같은 계정이 이미 접속 중 = 자동 재접속 또는 다른 PC에서 로그인한 경우.
         if (_sessions.Login(session, user) is ClientSession old)
         {
             Log.Info($"중복 로그인: 이전 연결 {old} 을(를) 끊고 새 연결 {session} 로 바꿉니다.");
@@ -300,6 +354,8 @@ public sealed class PacketHandler
 
     private string IssueLoginToken(string employeeNo, string deviceId)
     {
+        // [개념] 자동 로그인 토큰 = 암호학적으로 안전한 난수 32바이트(256비트)를 URL에 써도 되는 문자열로 바꾼 것. 추측할 수 없어야 하므로
+        //        Random이 아니라 RandomNumberGenerator를 쓴다. (+ / = 문자를 바꾸고 지우는 이유는 Base64 특수문자를 피하려는 것)
         string token = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         _users.IssueLoginToken(employeeNo, deviceId, token, DateTime.UtcNow.AddDays(30));
         return token;

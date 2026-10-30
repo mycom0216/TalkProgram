@@ -3,7 +3,7 @@
 C# / .NET 10 TCP 소켓 기반 1:N 사내 메신저. 서버는 접속자마다 수신·송신 스레드를 따로 두어 동시 채팅을 처리한다.
 WinForms 클라이언트, MariaDB, TLS 암호화, 파일 전송(최대 3GB), 관리자 기능·감사 로그를 갖췄다.
 
-[![Build](https://github.com/mycom0216/ChatApp/actions/workflows/dotnet-desktop.yml/badge.svg)](https://github.com/mycom0216/ChatApp/actions/workflows/dotnet-desktop.yml)
+[![Build](https://github.com/mycom0216/TalkProgram/actions/workflows/dotnet-desktop.yml/badge.svg)](https://github.com/mycom0216/TalkProgram/actions/workflows/dotnet-desktop.yml)
 
 ## 팀
 

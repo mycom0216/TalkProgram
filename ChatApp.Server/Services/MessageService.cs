@@ -15,6 +15,54 @@ namespace ChatApp.Server.Services;
 // [스레드] 요청한 사람의 수신 스레드에서 실행된다. DB 쓰기는 MessageStore 큐(DbWriter 스레드)에 맡겨 순서를 지킨다.
 // [연결]   PacketHandler가 ChatMsg/Whisper/MessageDelete/Reaction/ReadMark/HistoryReq/SearchReq/DirectoryReq를 이리로 넘긴다.
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   메시지에 관한 모든 기능의 창구: 보내기(방·1:1, 답장), 수정, 삭제, 공감, 읽음 표시, 입력 중 표시, 검색, 지난 대화 요청, 사람 목록.
+//
+// ■ "메시지를 보내면 어떤 길을 지나나요?" (면접 단골 · HandleChat)
+//   클라이언트 입력 → ChatMsg 패킷 → ClientSession 수신 스레드 → PacketHandler.Handle → HandleChat
+//   ① 빈 글이면 무시, 500자로 자름  ② 내가 참여한 방인지 확인(GetJoinedRoom)
+//   ③ 보낸 사람 이름·사원번호·시각·메시지 번호를 "서버가" 채움(사칭 방지)  ④ 답장이면 같은 방의 메시지인지 확인
+//   ⑤ 저장 예약(messages.Save) ⑥ 최근 메시지 기억(Remember) ⑦ 같은 방 접속자들에게 SendToRoom → 각자의 송신 큐 → 소켓 → 화면
+//   핵심: 저장을 "보내기 전에" 예약한다. 이 메시지를 실시간으로 못 받은 사람(막 입장하는 사람)도 지난 대화로 받을 수 있게 하려는 것.
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - 서버가 신뢰 경계다(클라이언트 값을 믿지 않기) ... "never trust client input server side validation"
+//   - 람다(() => ...)를 큐에 넣어 나중에 실행 ......... "C# lambda Action queue"
+//   - Interlocked로 시각 비교(간격 제한) ............ "rate limit TickCount64 Interlocked"
+//   - 캐시와 만료(30초) ............................. "simple time based cache"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 클라이언트가 보낸 이름이나 시각을 쓰지 않고 서버가 채우는 이유는요?
+//       A. 수정한 클라이언트가 남의 이름으로 메시지를 보내거나 시각을 조작할 수 있기 때문입니다. 서버가 알고 있는 로그인 정보(session.User)로 직접 채워서 사칭을 막습니다.
+//   Q2. 메시지 번호(MessageId)를 서버가 발급하는 이유는요?
+//       A. 받는 사람이 답장·삭제·공감을 할 때 그 번호로 메시지를 가리켜야 하는데, DB의 AUTO_INCREMENT는 저장한 뒤에야 알 수 있습니다. 저장은 나중에 DbWriter가 하므로, 서버가 Interlocked로 먼저 번호를 줍니다.
+//   Q3. 저장을 전송보다 먼저 예약하는 이유는요?
+//       A. 큐는 들어온 순서대로 처리됩니다. A가 보낸 메시지가 저장 큐에 먼저 들어가 있으면, 바로 뒤에 B가 입장해서 지난 대화를 요청해도 그 메시지가 이미 저장된 뒤라서 놓치지 않습니다.
+//   Q4. 삭제·공감·답장을 할 때마다 "볼 권한"을 확인하는 이유는요?
+//       A. 메시지 번호만 알면 다른 방의 메시지를 지우거나 인용으로 엿볼 수 있습니다. CanSee가 "방 메시지는 그 방 멤버, 1:1은 두 당사자"인지 매번 서버에서 확인합니다.
+//   Q5. 삭제 규칙은 어떻게 되나요? 완전히 지우나요?
+//       A. 내 메시지는 보낸 지 24시간 안에, 남의 메시지는 관리자만 삭제할 수 있습니다. 화면에서는 "삭제된 메시지입니다."로 바뀌지만 내용은 DB에 남겨 감사·분쟁에 대비하고, 관리자가 지우면 감사 로그에도 남깁니다.
+//   Q6. 검색은 왜 DbWriter 큐가 아니라 요청한 사람의 수신 스레드에서 하나요?
+//       A. 검색은 느릴 수 있는데, DbWriter 큐에 넣으면 그동안 모든 사람의 대화 저장이 밀립니다. 대신 한 사람이 연달아 누르지 못하게 2초 간격과 검색어 길이 제한을 둡니다.
+//   Q7. 상대가 오프라인이어도 1:1 메시지를 보낼 수 있나요?
+//       A. 네. 저장해 두었다가 상대가 다음에 로그인하면 OnLogin이 "안 읽은 1:1" 요약을 보냅니다. 상대가 접속 중이면 바로 전달합니다.
+//   Q8. 나중에 방에 들어온 사람도 이전 대화를 볼 수 있나요?
+//       A. 아니요. 방 기록은 멤버가 된 시각(JoinedAt) 이후 것만 보냅니다(기본 방은 제한 없음).
+//   Q9. 읽음 표시에서 "미래 시각"을 막는 이유는요?
+//       A. 수정한 클라이언트가 먼 미래 시각을 보내면 모든 메시지가 "읽음"으로 처리됩니다. 서버 시계를 기준으로 현재 시각까지만 인정합니다.
+//
+// ■ 문제가 났을 때 어디를 볼까 (유지보수)
+//   - "참여하지 않은 방에는 메시지를 보낼 수 없습니다" ... GetJoinedRoom(RoomManager), 재접속 직후 방 연결(Attach) 확인
+//   - 긴 메시지가 잘린다 ............................ MaxMessageLength(500). DB 칸(VARCHAR(500))과 같은 값이어야 한다
+//   - 삭제·수정 버튼이 안 먹는다 .................... HandleDelete(24시간)/HandleEdit(5분) 시간 제한과 소유자·관리자 확인
+//   - 답장 인용이 붙지 않는다 ....................... ResolveReply: 같은 대화의 메시지가 아니면 일부러 null
+//   - 안 읽은 수·읽음 표시가 이상하다 ................ HandleReadMark, RoomService.MarkRead
+//   - 검색이 "잠시 후 다시" 라고 나온다 .............. HandleSearch의 2초 간격 제한(정상)
+// ───────────────────────────────────────────────────────────────────────────
 public sealed class MessageService(
     SessionManager sessions,
     RoomManager rooms,
@@ -51,6 +99,7 @@ public sealed class MessageService(
         // Sender는 클라이언트 값이 아니라 서버가 알고 있는 사용자 정보로 채운다(사칭 방지).
         UserInfo me = session.User!;
         var chat = Packet.Create(PacketType.ChatMsg, body, sender: me.DisplayName, target: room.Id.ToString());
+        // [왜] 이름(Sender)·사원번호·시각·메시지 번호를 모두 서버가 채운다. 클라이언트가 보낸 값은 쓰지 않으므로 남을 사칭하거나 시각을 속일 수 없다.
         chat.SenderId = me.EmployeeNo;
         chat.Timestamp = RoomService.NowMs();
         chat.MessageId = messages.NextId();
@@ -61,6 +110,8 @@ public sealed class MessageService(
         // 지난 대화 불러오기로 받을 수 있다 (MessageStore 큐는 순서대로 처리되므로).
         messages.Save(new StoredMessage(chat.MessageId, room.Id, me.EmployeeNo, null, body, "CHAT", chat.Timestamp, chat.ReplyTo?.MessageId));
         messages.Remember(new MessageMeta(chat.MessageId, room.Id, me.EmployeeNo, null, me.DisplayName, body, chat.Timestamp, false));
+        // [읽는 법] SendToRoom은 그 방에 접속 중인 사람 "각자의 송신 큐"에 넣기만 한다(바로 돌아옴). 보낸 사람 본인에게도 가며,
+        //           클라이언트는 이 도착본으로 자기 말풍선을 그린다. 그래서 서버가 확정한 번호·시각이 화면에 그대로 쓰인다.
         rooms.SendToRoom(room, chat); // 같은 방 사람에게만
     }
 
@@ -144,6 +195,8 @@ public sealed class MessageService(
             return;
         }
 
+        // [읽는 법] () => { ... } 는 "나중에 DbWriter 스레드가 실행할 일"을 담은 람다(이름 없는 함수)다. 지금 실행되는 게 아니라 큐에 들어갈 뿐이다.
+        //           수정 → DB 반영 → 메모리 갱신 → 알림 전송이 큐의 순서 안에서 차례로 일어난다.
         messages.Enqueue("메시지 수정", () =>
         {
             if (!repository.MarkEdited(meta.Id, text)) return;
@@ -159,6 +212,8 @@ public sealed class MessageService(
         if (packet.GetData<TypingRequest>() is not { } request) return;
         long now = Environment.TickCount64;
         long last = Interlocked.Read(ref session.LastTypingTicks);
+        // [왜] "입력 중" 알림은 키를 누를 때마다 올 수 있다. 1초에 한 번만 처리해서 방 전체로 퍼지는 패킷이 폭주하지 않게 한다.
+        //      입력을 멈췄다는 알림(IsTyping = false)은 조건에서 제외되어 항상 전달된다.
         if (request.IsTyping && last != 0 && now - last < 1000) return;
         Interlocked.Exchange(ref session.LastTypingTicks, now);
 

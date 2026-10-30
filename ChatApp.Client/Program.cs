@@ -10,6 +10,36 @@ namespace ChatApp.Client;
 //           ChatClient가 서버에 연결되면 내부에서 "수신 스레드"를 따로 만든다(서버 메시지 수신 전용).
 // - 연결: ClientSettings(설정) → LoginForm(로그인/회원가입) → MainForm(친구 목록, 대화창 관리)
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// ───────────────────────────────────────────────────────────────────────────
+// [공부 노트 · 면접 대비]
+//
+// ■ 한 줄 요약
+//   프로그램이 시작되면 "설정 읽기 → (로그인 창 → 메인 창) 반복"을 도는 Main 하나뿐인 파일. 로그아웃하면 루프가 한 바퀴 더 돌아 로그인 창으로 돌아온다.
+//
+// ■ 실행 흐름 (while 루프 한 바퀴)
+//   ① new ChatClient()  ② LoginForm.ShowDialog() — 성공(OK)이고 client.Me가 있어야 다음으로, 아니면 return(프로그램 종료)
+//   ③ Application.Run(MainForm) — 메인 창이 닫힐 때까지 메시지 루프  ④ main.LogoutRequested가 true면 루프 처음으로(다른 계정으로 재로그인), false면 종료
+//   → 매 바퀴 ChatClient를 새로 만들므로, 이전 계정의 연결·상태가 남지 않는다("using var"가 바퀴 끝에서 Dispose).
+//
+// ■ 이 파일에서 나오는 개념과 검색어
+//   - [STAThread]와 COM 아파트먼트 ................. "STAThread WinForms clipboard dialog"
+//   - 메시지 루프(Application.Run) ................. "Windows message loop WinForms Application.Run"
+//   - UI 스레드 예외 처리(ThreadException) .......... "Application.ThreadException SetUnhandledExceptionMode"
+//   - using 선언(using var)과 Dispose .............. "C# using declaration IDisposable"
+//   - 모달 대화상자와 DialogResult ................. "ShowDialog DialogResult modal"
+//
+// ■ 면접 예상 질문과 답
+//   Q1. 로그아웃하면 어떻게 로그인 화면으로 돌아오나요?
+//       A. Main이 while(true) 루프라서, 메인 창이 LogoutRequested=true로 닫히면 return하지 않고 루프를 돌아 새 ChatClient와 새 LoginForm을 만듭니다. 프로그램을 다시 켜지 않아도 계정을 바꿀 수 있습니다.
+//   Q2. [STAThread]는 왜 붙이나요?
+//       A. 클립보드·파일 열기 대화상자·드래그 앤 드롭이 내부적으로 COM을 쓰고, 이 기능들은 STA 스레드에서만 안정적으로 동작하기 때문입니다.
+//   Q3. 처리하지 못한 예외가 나면 프로그램이 바로 꺼지나요?
+//       A. UI 스레드 예외는 CatchException 모드로 바꾸고 ThreadException에서 메시지 상자를 띄운 뒤 계속 실행합니다. 단, 수신 스레드 같은 다른 스레드의 예외는 이 핸들러가 잡지 못합니다(그쪽은 해당 코드에서 직접 처리해야 함).
+//
+// ■ 알아 둘 점 (코드는 바꾸지 않음)
+//   - ThreadException에서 오류를 사용자에게만 보여 주고 파일 로그로 남기지는 않는다. 현장 문제 추적을 하려면 로그 파일 기록을 붙이면 좋다.
+// ───────────────────────────────────────────────────────────────────────────
 
 internal static class Program
 {
