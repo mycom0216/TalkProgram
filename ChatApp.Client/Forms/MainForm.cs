@@ -563,7 +563,7 @@ public sealed partial class MainForm : Form
             }
             Icon?.Dispose();
         }
-        base.Dispose(disposing);
+        base.Dispose(disposing);                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
     }
 
     private void SetStatus(string text, Color color)
