@@ -39,6 +39,7 @@ public sealed class TlsFixture : IDisposable
 
 public class TlsTests(TlsFixture fixture) : IClassFixture<TlsFixture>
 {
+// ===============
     // 이 테스트는 “지문은 SHA256 64자이고 보기용 형식과 서로 바꿀 수 있다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 지문은_SHA256_64자이고_보기용_형식과_서로_바꿀_수_있다()
@@ -49,6 +50,7 @@ public class TlsTests(TlsFixture fixture) : IClassFixture<TlsFixture>
         Assert.Equal(raw, TlsHelper.Normalize(TlsHelper.Format(raw).ToLowerInvariant().Replace(":", " ")));
     }
 
+// ===============
     // 이 테스트는 “자동 생성 인증서는 개인 키가 있고 5년 유효하다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 자동_생성_인증서는_개인_키가_있고_5년_유효하다()
@@ -58,6 +60,7 @@ public class TlsTests(TlsFixture fixture) : IClassFixture<TlsFixture>
         Assert.True(File.Exists(Path.Combine(fixture.Folder, "server.pfx")));
     }
 
+// ===============
     // 이 테스트는 “처음 보는 자체 서명 인증서는 사용자 확인이 필요하다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task 처음_보는_자체_서명_인증서는_사용자_확인이_필요하다()
@@ -67,6 +70,7 @@ public class TlsTests(TlsFixture fixture) : IClassFixture<TlsFixture>
         Assert.Equal(TlsHelper.Fingerprint(fixture.Tls.Certificate), ex.Fingerprint);
     }
 
+// ===============
     // 이 테스트는 “저장한 지문과 같으면 연결되고 패킷이 암호화되어 오간다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task 저장한_지문과_같으면_연결되고_패킷이_암호화되어_오간다()
@@ -79,6 +83,7 @@ public class TlsTests(TlsFixture fixture) : IClassFixture<TlsFixture>
         Assert.Equal("핑", NetworkHelper.ReadPacket(ssl)?.Body); // 테스트 서버는 받은 패킷을 그대로 돌려준다
     }
 
+// ===============
     // 이 테스트는 “저장한 지문과 다르면 중간자 공격으로 보고 거부한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task 저장한_지문과_다르면_중간자_공격으로_보고_거부한다()
