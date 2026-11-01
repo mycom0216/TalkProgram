@@ -11,6 +11,7 @@ namespace ChatApp.Tests;
 
 public class NetworkHelperTests
 {
+    // 이 테스트는 “연달아 쓴 패킷을 순서대로 하나씩 읽는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 연달아_쓴_패킷을_순서대로_하나씩_읽는다()
     {
@@ -24,6 +25,7 @@ public class NetworkHelperTests
         Assert.Null(NetworkHelper.ReadPacket(stream)); // 끝(상대가 정상 종료)이면 null
     }
 
+    // 이 테스트는 “바이트가 한 개씩 쪼개져 와도 패킷을 온전히 읽는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 바이트가_한_개씩_쪼개져_와도_패킷을_온전히_읽는다()
     {
@@ -37,6 +39,7 @@ public class NetworkHelperTests
         Assert.Equal(PacketType.Ping, NetworkHelper.ReadPacket(trickle)?.Type);
     }
 
+    // 이 테스트는 “비정상 길이면 연결을 끊도록 예외를 던진다” 상황이 제대로 처리되는지 확인합니다.
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -48,6 +51,7 @@ public class NetworkHelperTests
         Assert.Throws<InvalidDataException>(() => NetworkHelper.ReadPacket(stream));
     }
 
+    // 이 테스트는 “본문 도중에 끊기면 예외를 던진다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 본문_도중에_끊기면_예외를_던진다()
     {
@@ -56,6 +60,7 @@ public class NetworkHelperTests
         Assert.Throws<EndOfStreamException>(() => NetworkHelper.ReadPacket(stream));
     }
 
+    // 이 테스트는 “평문 서버는 TLS 인사말을 알아보고 바로 거절한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 평문_서버는_TLS_인사말을_알아보고_바로_거절한다()
     {

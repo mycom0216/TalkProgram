@@ -13,6 +13,7 @@ public class DownloadQueueTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "chatapp-dlq-" + Guid.NewGuid().ToString("N")[..8]);
     private readonly List<string> _started = [], _done = [], _failed = [];
 
+    // 파일 전송 도구와 가짜 전송 함수를 준비합니다. 실제 서버에 접속하지 않아도 테스트할 수 있습니다.
     public DownloadQueueTests()
     {
         Directory.CreateDirectory(_dir);
@@ -22,12 +23,14 @@ public class DownloadQueueTests : IDisposable
         _svc.DownloadFailed += (id, _) => { lock (_failed) _failed.Add(id); };
     }
 
+    // 테스트가 끝나면 진행 중인 전송을 취소하고 임시 파일을 지웁니다.
     public void Dispose()
     {
         _svc.CancelAll("테스트 끝");
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
+    // 여러 개의 파일 받기를 시작하고, 각 파일을 구분할 번호를 돌려줍니다.
     private List<string> Start(int count)
     {
         var ids = Enumerable.Range(0, count).Select(_ => FileRules.NewFileId()).ToList();
@@ -35,9 +38,13 @@ public class DownloadQueueTests : IDisposable
         return ids;
     }
 
+    // 기록해 둔 전송 내역에서 지정한 종류의 패킷이 몇 개인지 셉니다.
     private int Count(PacketType type) { lock (_sent) return _sent.Count(p => p.Type == type); }
+
+    // 지정한 파일을 받으려고 서버에 보낸 요청 번호를 찾습니다.
     private string RequestIdOf(string id) { lock (_sent) return _sent.Last(p => p.Type == PacketType.FileDownloadReq && p.Target == id).Body!; }
 
+    // 서버가 파일 설명, 파일 조각, 전송 완료 신호를 차례로 보낸 상황을 흉내 냅니다.
     private void Complete(string id)
     {
         string rq = RequestIdOf(id);
@@ -46,6 +53,7 @@ public class DownloadQueueTests : IDisposable
         _svc.TryHandle(Packet.Create(PacketType.FileDownloadEnd, rq, target: id));
     }
 
+    // 이 테스트는 “다섯개를 받으면 세개만 요청하고 둘은 대기한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 다섯개를_받으면_세개만_요청하고_둘은_대기한다()
     {
@@ -57,6 +65,7 @@ public class DownloadQueueTests : IDisposable
         Assert.Equal(ids.Take(3), _started);
     }
 
+    // 이 테스트는 “하나가 끝나면 대기하던 다음 파일을 자동으로 요청한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 하나가_끝나면_대기하던_다음_파일을_자동으로_요청한다()
     {
@@ -71,6 +80,7 @@ public class DownloadQueueTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_dir, ids[4] + ".bin")));
     }
 
+    // 이 테스트는 “서버가 동시에 제한으로 거절하면 실패하지 않고 다시 요청한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 서버가_동시에_제한으로_거절하면_실패하지_않고_다시_요청한다()
     {
@@ -86,6 +96,7 @@ public class DownloadQueueTests : IDisposable
         Assert.Single(_done);
     }
 
+    // 이 테스트는 “대기중인 파일을 취소하면 서버에 아무것도 보내지 않는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 대기중인_파일을_취소하면_서버에_아무것도_보내지_않는다()
     {
@@ -96,6 +107,7 @@ public class DownloadQueueTests : IDisposable
         Assert.Equal(3, Count(PacketType.FileDownloadReq)); // 취소한 4번째는 요청되지 않는다
     }
 
+    // 이 테스트는 “받는중인 파일을 취소하면 서버에 알리고 다음 파일이 시작된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 받는중인_파일을_취소하면_서버에_알리고_다음_파일이_시작된다()
     {

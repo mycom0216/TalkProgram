@@ -25,12 +25,14 @@ public sealed class MessageRef
     public string? PeerNo { get; set; }     // 1:1이면 "받는 사람 입장에서의" 상대 사원번호
 }
 
+/// <summary>기존 메시지의 글을 바꾸어 달라는 요청입니다.</summary>
 public sealed class EditMessageRequest
 {
     public long MessageId { get; set; }
     public string Text { get; set; } = "";
 }
 
+/// <summary>사용자가 지금 글을 입력 중인지 알려 달라는 요청입니다.</summary>
 public sealed class TypingRequest
 {
     public int? RoomId { get; set; }
@@ -38,6 +40,7 @@ public sealed class TypingRequest
     public bool IsTyping { get; set; }
 }
 
+/// <summary>대화 상대에게 보여 줄 입력 중 상태 정보입니다.</summary>
 public sealed class TypingInfo
 {
     public int? RoomId { get; set; }
@@ -123,6 +126,7 @@ public sealed class SearchHit
     public DateTime Time { get; set; }
 }
 
+/// <summary>검색한 단어와 그 단어가 들어 있는 메시지들의 목록입니다.</summary>
 public sealed class SearchResult
 {
     public string Keyword { get; set; } = "";

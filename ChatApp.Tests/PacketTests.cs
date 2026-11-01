@@ -13,6 +13,7 @@ namespace ChatApp.Tests;
 
 public class PacketTests
 {
+    // 이 테스트는 “기본 칸들이 직렬화 후 그대로 복원된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 기본_칸들이_직렬화_후_그대로_복원된다()
     {
@@ -35,6 +36,7 @@ public class PacketTests
         Assert.Equal(original.Timestamp, copy.Timestamp);
     }
 
+    // 이 테스트는 “헤더의 길이값이 본문 길이와 같다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 헤더의_길이값이_본문_길이와_같다()
     {
@@ -43,6 +45,7 @@ public class PacketTests
         Assert.Equal(wire.Length - PacketSerializer.HeaderSize, length);
     }
 
+    // 이 테스트는 “패킷 종류는 숫자가 아니라 이름으로 보낸다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 패킷_종류는_숫자가_아니라_이름으로_보낸다()
     {
@@ -52,6 +55,7 @@ public class PacketTests
         Assert.Contains("\"AdminActionReq\"", json);
     }
 
+    // 이 테스트는 “Data에 담은 객체를 GetData로 꺼낼 수 있다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void Data에_담은_객체를_GetData로_꺼낼_수_있다()
     {
@@ -65,6 +69,7 @@ public class PacketTests
         Assert.True(copy.MustChangePassword);
     }
 
+    // 이 테스트는 “파일 조각 바이트가 그대로 복원된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 파일_조각_바이트가_그대로_복원된다()
     {
@@ -74,6 +79,7 @@ public class PacketTests
         Assert.Equal(chunk, copy.Bin);
     }
 
+    // 이 테스트는 “같은 패킷을 여러 명에게 보낼 때 바이트를 한 번만 만든다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 같은_패킷을_여러_명에게_보낼_때_바이트를_한_번만_만든다()
     {
@@ -82,6 +88,7 @@ public class PacketTests
         Assert.Same(packet.ToWireBytes(), packet.ToWireBytes());
     }
 
+    // 이 테스트는 “깨진 Data는 예외 없이 null이 된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 깨진_Data는_예외_없이_null이_된다()
     {
