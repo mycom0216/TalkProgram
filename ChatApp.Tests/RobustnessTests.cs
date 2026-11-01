@@ -8,10 +8,12 @@ namespace ChatApp.Tests;
 // 서버 안정성 개선(1순위)과 관련된 테스트: 글자 자르기, 모르는 패킷 종류, 프로토콜 버전.
 public class RobustnessTests
 {
+// ===============
     // 이 테스트는 “짧은 글은 그대로 둔다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 짧은_글은_그대로_둔다() => Assert.Equal("안녕", TextUtil.Truncate("안녕", 500));
 
+// ===============
     // 이 테스트는 “이모지를 반쪽으로 자르지 않는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 이모지를_반쪽으로_자르지_않는다()
@@ -23,6 +25,7 @@ public class RobustnessTests
         Assert.Equal("가나😀", TextUtil.Truncate(text, 4)); // 이모지 전체가 들어가면 포함
     }
 
+// ===============
     // 이 테스트는 “긴 글은 최대 길이를 넘지 않는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 긴_글은_최대_길이를_넘지_않는다()
@@ -33,6 +36,7 @@ public class RobustnessTests
         Assert.False(char.IsHighSurrogate(cut[^1])); // 끝이 이모지 반쪽이 아니다
     }
 
+// ===============
     // 이 테스트는 “모르는 패킷 종류는 예외 없이 Unknown이 된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 모르는_패킷_종류는_예외_없이_Unknown이_된다()
@@ -44,6 +48,7 @@ public class RobustnessTests
         Assert.Equal("hi", packet.Body); // 나머지 칸은 정상
     }
 
+// ===============
     // 이 테스트는 “아는 패킷 종류는 이름으로 읽는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 아는_패킷_종류는_이름으로_읽는다()
@@ -52,6 +57,7 @@ public class RobustnessTests
         Assert.Equal(PacketType.ChatMsg, packet.Type);
     }
 
+// ===============
     // 이 테스트는 “버전 칸이 없는 옛 로그인 요청은 0으로 읽힌다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 버전_칸이_없는_옛_로그인_요청은_0으로_읽힌다()
