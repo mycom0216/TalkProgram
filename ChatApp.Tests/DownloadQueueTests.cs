@@ -53,6 +53,7 @@ public class DownloadQueueTests : IDisposable
         _svc.TryHandle(Packet.Create(PacketType.FileDownloadEnd, rq, target: id));
     }
 
+// ===============
     // 이 테스트는 “다섯개를 받으면 세개만 요청하고 둘은 대기한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 다섯개를_받으면_세개만_요청하고_둘은_대기한다()
@@ -65,6 +66,7 @@ public class DownloadQueueTests : IDisposable
         Assert.Equal(ids.Take(3), _started);
     }
 
+// ===============
     // 이 테스트는 “하나가 끝나면 대기하던 다음 파일을 자동으로 요청한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 하나가_끝나면_대기하던_다음_파일을_자동으로_요청한다()
@@ -80,6 +82,7 @@ public class DownloadQueueTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_dir, ids[4] + ".bin")));
     }
 
+// ===============
     // 이 테스트는 “서버가 동시에 제한으로 거절하면 실패하지 않고 다시 요청한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 서버가_동시에_제한으로_거절하면_실패하지_않고_다시_요청한다()
@@ -96,6 +99,7 @@ public class DownloadQueueTests : IDisposable
         Assert.Single(_done);
     }
 
+// ===============
     // 이 테스트는 “대기중인 파일을 취소하면 서버에 아무것도 보내지 않는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 대기중인_파일을_취소하면_서버에_아무것도_보내지_않는다()
@@ -107,6 +111,7 @@ public class DownloadQueueTests : IDisposable
         Assert.Equal(3, Count(PacketType.FileDownloadReq)); // 취소한 4번째는 요청되지 않는다
     }
 
+// ===============
     // 이 테스트는 “받는중인 파일을 취소하면 서버에 알리고 다음 파일이 시작된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 받는중인_파일을_취소하면_서버에_알리고_다음_파일이_시작된다()
