@@ -13,6 +13,7 @@ public class FeatureTests
 
     // ───────── 실행 파일 경고 확장자 ─────────
 
+// ===============
     // 이 테스트는 “실행으로 이어지는 형식은 경고 대상이다” 상황이 제대로 처리되는지 확인합니다.
     [Theory]
     [InlineData("설치.iso")]
@@ -23,6 +24,7 @@ public class FeatureTests
     [InlineData("노트.one")]
     public void 실행으로_이어지는_형식은_경고_대상이다(string name) => Assert.True(FileRules.IsExecutable(name), name);
 
+// ===============
     // 이 테스트는 “일반 문서는 경고하지 않는다” 상황이 제대로 처리되는지 확인합니다.
     [Theory]
     [InlineData("보고서.docx")]
@@ -32,6 +34,7 @@ public class FeatureTests
 
     // ───────── 패킷: 메시지 번호·답장 ─────────
 
+// ===============
     // 이 테스트는 “메시지 번호와 답장 정보가 전송된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 메시지_번호와_답장_정보가_전송된다()
@@ -46,6 +49,7 @@ public class FeatureTests
         Assert.Equal("홍길동 대리", back.ReplyTo.SenderName);
     }
 
+// ===============
     // 이 테스트는 “번호가 없는 패킷은 MessageId 칸을 보내지 않는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 번호가_없는_패킷은_MessageId_칸을_보내지_않는다()
@@ -56,6 +60,7 @@ public class FeatureTests
         Assert.DoesNotContain("ReplyTo", json);
     }
 
+// ===============
     // 이 테스트는 “공감은 정해진 여섯 가지다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 공감은_정해진_여섯_가지다()
@@ -64,6 +69,7 @@ public class FeatureTests
         Assert.Equal(ReactionRequest.Allowed.Length, ReactionRequest.Allowed.Distinct().Count());
     }
 
+// ===============
     // 이 테스트는 “서버 안내에 최신 클라이언트 버전이 실린다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 서버_안내에_최신_클라이언트_버전이_실린다()
@@ -75,6 +81,7 @@ public class FeatureTests
         Assert.Equal(@"\\fs\share\setup.exe", read.ClientUpdateUrl);
     }
 
+// ===============
     // 이 테스트는 “기기별 자동로그인 요청과 파일목록 페이지가 직렬화된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 기기별_자동로그인_요청과_파일목록_페이지가_직렬화된다()
@@ -101,6 +108,7 @@ public class FeatureTests
 
     // ───────── 검색: LIKE 특수 문자 ─────────
 
+// ===============
     // 이 테스트는 “검색어의 특수문자는 글자 그대로 찾는다” 상황이 제대로 처리되는지 확인합니다.
     [Theory]
     [InlineData("100%", "100\\%")]
@@ -110,6 +118,7 @@ public class FeatureTests
     public void 검색어의_특수문자는_글자_그대로_찾는다(string input, string expected)
         => Assert.Equal(expected, MessageRepository.EscapeLike(input));
 
+// ===============
     // 이 테스트는 “답장 미리보기는 한 줄로 짧게 자른다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 답장_미리보기는_한_줄로_짧게_자른다()
@@ -121,6 +130,7 @@ public class FeatureTests
 
     // ───────── 파일 보내기: 대량 큐 ─────────
 
+// ===============
     // 이 테스트는 “파일 조각과 끝 알림은 대량 큐로 순서대로 나간다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task 파일_조각과_끝_알림은_대량_큐로_순서대로_나간다()
@@ -160,6 +170,7 @@ public class FeatureTests
         }
     }
 
+// ===============
     // 이 테스트는 “대량 큐가 실패하면 업로드도 실패로 끝난다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task 대량_큐가_실패하면_업로드도_실패로_끝난다()
