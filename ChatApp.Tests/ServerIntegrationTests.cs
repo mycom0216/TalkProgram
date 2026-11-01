@@ -56,6 +56,7 @@ public sealed class ServerFixture : IDisposable
 
 public class ServerIntegrationTests(ServerFixture server) : IClassFixture<ServerFixture>
 {
+// ===============
     // 이 테스트는 “Ping을 보내면 Pong이 온다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task Ping을_보내면_Pong이_온다()
@@ -65,6 +66,7 @@ public class ServerIntegrationTests(ServerFixture server) : IClassFixture<Server
         Assert.Equal(PacketType.Pong, c.Read()?.Type);
     }
 
+// ===============
     // 이 테스트는 “로그인 전에는 채팅할 수 없다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task 로그인_전에는_채팅할_수_없다()
@@ -76,6 +78,7 @@ public class ServerIntegrationTests(ServerFixture server) : IClassFixture<Server
         Assert.Contains("로그인", reply?.Body);
     }
 
+// ===============
     // 이 테스트는 “DB가 죽어 있어도 서버는 오류로 답하고 계속 동작한다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task DB가_죽어_있어도_서버는_오류로_답하고_계속_동작한다()
@@ -92,6 +95,7 @@ public class ServerIntegrationTests(ServerFixture server) : IClassFixture<Server
         Assert.Equal(PacketType.Pong, c.Read()?.Type);
     }
 
+// ===============
     // 이 테스트는 “여러 클라이언트가 동시에 접속해도 각자 응답을 받는다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task 여러_클라이언트가_동시에_접속해도_각자_응답을_받는다()
@@ -109,6 +113,7 @@ public class ServerIntegrationTests(ServerFixture server) : IClassFixture<Server
         }
     }
 
+// ===============
     // 이 테스트는 “TLS 서버에 평문으로 붙으면 연결이 끊긴다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public async Task TLS_서버에_평문으로_붙으면_연결이_끊긴다()
