@@ -49,7 +49,7 @@ ChatApp.slnx
 2. `ChatApp.Server/appsettings.example.json`을 복사해 같은 폴더에 `appsettings.json`을 만든다.
 3. `appsettings.json`의 `ConnectionString` 비밀번호와 `AllowedEmailDomains`(가입 허용 이메일 도메인 목록, ["*"]면 제한 없음)을 수정한다.
    - `appsettings.json`은 `.gitignore`에 있어 GitHub에 올라가지 않는다.
-4. 이미 DB를 만들었다면 저장소 루트 폴더에서 추가 스크립트를 번호 순서대로 한 번씩 실행한다. 아래 예시에서 `db\\`는 저장소 안의 db 폴더를 뜻한다.
+4. 이미 DB를 만들었다면 저장소 루트 폴더에서 추가 스크립트를 번호 순서대로 한 번씩 실행한다. 명령어는 저장소 루트 폴더에서 실행한다.
 
 ```
 "C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_002_files.sql"
