@@ -45,20 +45,20 @@ ChatApp.slnx
 
 ## 처음 준비 (MariaDB)
 
-1. MariaDB에 root로 접속해 `C:\Users\LMS\Downloads\ChatApp\ChatApp\db\schema.sql` 전체를 실행한다. (파일 안의 `여기에_DB_비밀번호`를 먼저 바꾼다)
+1. MariaDB에 root로 접속해 `db\schema.sql` 전체를 실행한다. (파일 안의 `여기에_DB_비밀번호`를 먼저 바꾼다)
 2. `ChatApp.Server/appsettings.example.json`을 복사해 같은 폴더에 `appsettings.json`을 만든다.
 3. `appsettings.json`의 `ConnectionString` 비밀번호와 `AllowedEmailDomains`(가입 허용 이메일 도메인 목록, ["*"]면 제한 없음)을 수정한다.
    - `appsettings.json`은 `.gitignore`에 있어 GitHub에 올라가지 않는다.
-4. 이미 DB를 만들었다면 추가 스크립트를 순서대로 한 번씩 실행한다. cmd 어느 폴더에서 실행해도 된다.
+4. 이미 DB를 만들었다면 저장소 루트 폴더에서 추가 스크립트를 번호 순서대로 한 번씩 실행한다. 아래 예시에서 `db\\`는 저장소 안의 db 폴더를 뜻한다.
 
 ```
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_002_files.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_003_status.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_004_admin.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_005_rooms_messages.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_011_friends.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_012_profile_photo.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_013_profile_background.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_002_files.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_003_status.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_004_admin.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_005_rooms_messages.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_011_friends.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_012_profile_photo.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_013_profile_background.sql"
 ```
 
    - 002 = 파일 전송, 003 = 상태 메시지, 004 = 관리자 기능, 005 = 영구·비공개 방, 답장·공감·삭제, 읽음 표시, 검색 인덱스. 이미 실행한 것을 다시 실행해도 문제없다(IF NOT EXISTS).
@@ -136,7 +136,7 @@ dotnet run --project ChatApp.ConsoleClient       # 창을 2~3개 띄워서 테�
 dotnet test ChatApp.Tests      # 또는 Visual Studio: 테스트 → 모든 테스트 실행
 ```
 
-- 단위·통합 테스트 82개를 돈다. 패킷 직렬화, 패킷 경계(TCP 분할 수신), 파일 이름 정리, 비밀번호 해시, 설정 파일, TLS 지문 고정, 실제 서버에 소켓 접속하는 테스트가 들어 있다.
+- 패킷 직렬화, 패킷 경계(TCP 분할 수신), 파일 이름 정리, 비밀번호 해시, 설정 파일, TLS 지문 고정, 실제 서버에 소켓 접속 등을 확인하는 단위·통합 테스트를 실행한다.
 - DB 없이 돌아서 GitHub Actions가 푸시마다 자동으로 실행한다(위 Build 배지).
 - DB가 필요한 로그인·관리자 흐름은 실제 MariaDB로 시나리오 테스트를 했다. 결과와 화면 점검표는 [docs/TESTING.md](docs/TESTING.md)에 있다.
 
@@ -192,7 +192,7 @@ TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리�
 - [x] 비밀번호 변경 (내 이름 메뉴)
 - [x] 프로필 사진·배경 사진: 프로필 카드(내 사진 클릭, 동료 오른쪽 클릭, 말풍선 옆 사진 클릭)에서 보기·바꾸기·지우기, 목록·말풍선·대화창·알림 창에 사진 표시, 바뀐 것만 받아 PC에 캐시
 - [x] 친구: 아이디(사원번호)·휴대폰 번호로 찾아 추가(한쪽 방향), 접속하지 않은 친구도 목록에 표시, 오른쪽 클릭으로 추가·삭제. 휴대폰 번호는 공개하지 않고 정확히 일치할 때만 찾음(가린 번호로 표시)
-- [x] 6단계 테스트: xUnit 단위·통합 테스트 106개(CI 자동 실행), 화면 자동 테스트 3개(FlaUI), 관리자·방·정원·통계·친구·프로필 사진 시나리오, TLS 검증, 부하 테스트(100·300·500명)
+- [x] 6단계 테스트: xUnit 단위·통합 테스트(CI 자동 실행), 화면 자동 테스트(FlaUI), 관리자·방·정원·통계·친구·프로필 사진 시나리오, TLS 검증, 부하 테스트(100·300·500명)
 - [x] 6단계 문서화: README, 아키텍처 문서(docs/ARCHITECTURE.md), 테스트 결과서(docs/TESTING.md), 코드 주석, CI 빌드 배지
 - [x] 서버 안정성: 연결 수·IP당 연결 수 제한, 로그인 제한 시간, 보내기 큐 용량(바이트) 제한, 프로토콜 버전 확인, 모르는 패킷 무시, 예외로 스레드가 죽지 않게 정리
 - [x] 보안·운영: 로그인·가입 속도 제한(IP별), 로그인 시간 차 공격 방지, 보관 기간 자동 정리(대화 365일·파일 180일·감사 730일, 삭제된 방의 파일은 바로), DB 백업 스크립트, DB 버전 확인
