@@ -8,6 +8,7 @@ namespace ChatApp.UiTests;
 
 public sealed class LoginScreenTests
 {
+// ===============
     // 이 테스트는 “로그인 창의 필수 컨트롤이 UIA에 노출된다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     // 로그인 화면이 제대로 열리고, 필요한 칸과 버튼이 보이는지 자동으로 확인합니다.
