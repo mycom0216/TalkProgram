@@ -7,6 +7,7 @@ namespace ChatApp.Common.Models;
 //        (예전에는 보낸 사람+내용+시각으로 같은 메시지인지 짐작했다)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ===============
 /// <summary>답장 대상 메시지의 요약 (말풍선 위에 인용으로 보여 준다).</summary>
 public sealed class ReplyInfo
 {
@@ -17,6 +18,7 @@ public sealed class ReplyInfo
     public string Text { get; set; } = "";       // 원문 앞부분 (MaxPreviewLength자)
 }
 
+// ===============
 /// <summary>메시지 하나를 가리킨다 (삭제 요청·삭제 알림). 어느 대화의 메시지인지도 함께 담는다.</summary>
 public sealed class MessageRef
 {
@@ -25,6 +27,7 @@ public sealed class MessageRef
     public string? PeerNo { get; set; }     // 1:1이면 "받는 사람 입장에서의" 상대 사원번호
 }
 
+// ===============
 /// <summary>기존 메시지의 글을 바꾸어 달라는 요청입니다.</summary>
 public sealed class EditMessageRequest
 {
@@ -32,6 +35,7 @@ public sealed class EditMessageRequest
     public string Text { get; set; } = "";
 }
 
+// ===============
 /// <summary>사용자가 지금 글을 입력 중인지 알려 달라는 요청입니다.</summary>
 public sealed class TypingRequest
 {
@@ -40,6 +44,7 @@ public sealed class TypingRequest
     public bool IsTyping { get; set; }
 }
 
+// ===============
 /// <summary>대화 상대에게 보여 줄 입력 중 상태 정보입니다.</summary>
 public sealed class TypingInfo
 {
@@ -50,6 +55,7 @@ public sealed class TypingInfo
     public bool IsTyping { get; set; }
 }
 
+// ===============
 /// <summary>한 가지 공감(이모지)과 누른 사람들.</summary>
 public sealed class ReactionInfo
 {
@@ -57,9 +63,11 @@ public sealed class ReactionInfo
     public List<string> EmployeeNos { get; set; } = [];
 }
 
+// ===============
 /// <summary>공감 누르기/취소 요청.</summary>
 public sealed class ReactionRequest
 {
+// ===============
     /// <summary>고를 수 있는 공감. 아무 글자나 받지 않는 이유: 화면을 깨는 긴 문자열·이상한 문자를 막기 위해.</summary>
     public static readonly string[] Allowed = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
@@ -67,6 +75,7 @@ public sealed class ReactionRequest
     public string Emoji { get; set; } = "";
 }
 
+// ===============
 /// <summary>메시지의 공감 현황 (공감이 바뀔 때마다 그 대화의 사람들에게 보낸다).</summary>
 public sealed class ReactionUpdate
 {
@@ -76,6 +85,7 @@ public sealed class ReactionUpdate
     public List<ReactionInfo> Reactions { get; set; } = [];
 }
 
+// ===============
 /// <summary>"이 대화를 여기(UpTo 시각)까지 읽었다" (클라이언트 → 서버).</summary>
 public sealed class ReadMark
 {
@@ -84,6 +94,7 @@ public sealed class ReadMark
     public DateTime UpTo { get; set; }
 }
 
+// ===============
 /// <summary>누가 어디까지 읽었는지 (서버 → 그 대화의 사람들).</summary>
 public sealed class ReadUpdate
 {
@@ -93,6 +104,7 @@ public sealed class ReadUpdate
     public DateTime LastReadAt { get; set; }
 }
 
+// ===============
 /// <summary>로그인했을 때 알려 주는 "안 읽은 1:1 메시지" (보낸 사람별).</summary>
 public sealed class UnreadDirect
 {
@@ -103,6 +115,7 @@ public sealed class UnreadDirect
     public DateTime LastTime { get; set; }
 }
 
+// ===============
 /// <summary>서버 대화 검색 요청.</summary>
 public sealed class SearchRequest
 {
@@ -112,6 +125,7 @@ public sealed class SearchRequest
     public string Keyword { get; set; } = "";
 }
 
+// ===============
 /// <summary>검색 결과 한 줄.</summary>
 public sealed class SearchHit
 {
@@ -126,6 +140,7 @@ public sealed class SearchHit
     public DateTime Time { get; set; }
 }
 
+// ===============
 /// <summary>검색한 단어와 그 단어가 들어 있는 메시지들의 목록입니다.</summary>
 public sealed class SearchResult
 {
