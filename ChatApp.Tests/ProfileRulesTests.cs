@@ -5,6 +5,7 @@ namespace ChatApp.Tests;
 // 프로필 사진 형식 확인 (서버가 그림이 아닌 파일을 사진으로 저장하지 않게)
 public class ProfileRulesTests
 {
+// ===============
     // 이 테스트는 “JPEG와 PNG만 사진으로 본다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void JPEG와_PNG만_사진으로_본다()
@@ -17,6 +18,7 @@ public class ProfileRulesTests
         Assert.False(ProfileRules.IsSupportedImage(null));
     }
 
+// ===============
     // 이 테스트는 “사진 크기 제한은 패킷 한도 안에 들어간다” 상황이 제대로 처리되는지 확인합니다.
     [Fact]
     public void 사진_크기_제한은_패킷_한도_안에_들어간다()
