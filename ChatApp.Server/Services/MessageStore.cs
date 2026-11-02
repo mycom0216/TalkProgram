@@ -10,9 +10,9 @@ using ChatApp.Server.Logging;
 // MessageStore.cs — 대화 기록(채팅·귓속말)을 DB에 저장하고, 지난 대화를 불러와 보내 주는 "DB 작업 스레드"
 //
 // [연결 관계]
-//   PacketHandler.HandleChat / HandleWhisper ──Save()──────────────▶ 큐 ──▶ DbWriter 스레드 ──▶ MessageRepository.InsertMany
-//   PacketHandler.AnnounceJoin(방 입장)      ──RequestRoomHistory()─▶ 큐 ──▶ DbWriter 스레드 ──▶ LoadRoom → History 패킷 전송
-//   PacketHandler.HandleHistoryRequest(1:1)  ──RequestDirectHistory()▶ 큐 ──▶ DbWriter 스레드 ──▶ LoadDirect → History 패킷 전송
+//   MessageService.HandleChat / HandleWhisper ──Save()──────────────▶ 큐 ──▶ DbWriter 스레드 ──▶ MessageRepository.InsertMany
+//   RoomService(로그인 복원·방 만들기·입장·초대) ──RequestRoomHistory()─▶ 큐 ──▶ DbWriter 스레드 ──▶ LoadRoom → History 패킷 전송
+//   MessageService.HandleHistoryRequest(1:1)  ──RequestDirectHistory()▶ 큐 ──▶ DbWriter 스레드 ──▶ LoadDirect → History 패킷 전송
 //   파일 메시지의 미리보기는 FileService.ReadThumbnail(생성자로 받은 함수)로 디스크에서 읽어 붙인다.
 //
 // [관련 패킷]

@@ -404,7 +404,7 @@ public sealed class AuthService
     /// 로그인 최종 성공 기록(실패 횟수 0으로 초기화, 마지막 로그인 시각 저장).
     /// </summary>
     // [왜] Login() 안에서 바로 기록하지 않는 이유: 비밀번호가 맞아도 "이미 다른 곳에서 접속 중"이면 로그인이 거절될 수 있다.
-    //   그래서 PacketHandler가 세션 등록(TryLogin)까지 성공한 뒤에 이 메서드를 부른다.
+    //   그래서 PacketHandler가 세션 등록(SessionManager.Login)까지 성공한 뒤에 이 메서드를 부른다.
     public void RecordLoginSuccess(string employeeNo) => _users.RecordLoginSuccess(employeeNo);
 
     /// <summary>

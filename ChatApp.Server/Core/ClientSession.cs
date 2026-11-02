@@ -126,7 +126,7 @@ public sealed class ClientSession
     public bool IsTls => _stream is SslStream;
 
     /// <summary>로그인한 사용자 정보. 로그인 전에는 null.</summary>
-    // [개념] internal set: 읽기는 누구나, 쓰기는 같은 프로젝트 안(SessionManager.TryLogin)에서만.
+    // [개념] internal set: 읽기는 누구나, 쓰기는 같은 프로젝트 안(SessionManager.Login)에서만.
     public UserInfo? User { get; internal set; }
     public bool IsLoggedIn => User is not null;
     internal long LastTypingTicks;

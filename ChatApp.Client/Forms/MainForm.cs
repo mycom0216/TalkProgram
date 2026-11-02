@@ -73,7 +73,7 @@ namespace ChatApp.Client.Forms;
 
 /// <summary>
 /// 메인 창 (세로로 긴 친구 목록 창).
-/// ┌ 그라데이션 머리: 내 아바타 · 이름 직급 · 부서 · ● 온라인 ┐
+/// ┌ 그라데이션 머리: 내 아바타 · 이름 직급 · 부서 · 사원번호 · ● 상태(온라인 등) ┐
 /// │ [ 동료 N ] [ 채팅방 N ]                                   │
 /// │ 부서별 동료 목록 / 채팅방 목록 (더블클릭 → 대화창)         │
 /// └ 상태 줄: 연결 상태, 공지 ───────────────────────────────┘
@@ -372,7 +372,7 @@ public sealed partial class MainForm : Form
 
         _client.PacketReceived += OnPacketReceived;
         _client.Disconnected += OnDisconnected;
-        _client.ReleaseHeld(); // 로그인 직후 받아 둔 방 입장 결과·접속자·방 목록을 이제 전달받는다
+        _client.ReleaseHeld(); // 로그인 성공 직후부터 ChatClient가 보관해 둔 패킷(방 입장 결과·접속자·방 목록 등)을 이제 전달받는다
         _client.Send(Packet.Create(PacketType.ServerInfoReq)); // 파일 최대 크기·최신 버전 확인
         _client.Send(Packet.Create(PacketType.FriendListReq)); // 내 친구 목록
         _avatars.Note(_me); // 내 프로필 사진
@@ -477,7 +477,7 @@ public sealed partial class MainForm : Form
         if (!_connected || conv.HistoryLoading || !conv.HistoryHasMore) return;
         ChatItem? oldest = conv.Items.FirstOrDefault(item => !item.IsSystemLike && (item.MessageId > 0 || item.File is { State: FileState.Ready }));
         if (oldest is null) { conv.HistoryHasMore = false; return; }
-        // [읽는 법] 위로 스크롤해 더 오래된 대화를 받을 때의 "기준점"을 만든다: (가장 오래된 말풍선의 시각 + 키). 키는 파일이면 "F:파일번호", 메시지면 "M:" + 번호를 20자리 0 채움 — 문자열로 비교해도 번호 순서가 맞도록(D20). 서버는 이 기준점보다 앞선 것을 한 페이지(50개) 돌려준다(커서 기반 페이지).
+        // [읽는 법] 위로 스크롤해 더 오래된 대화를 받을 때의 "기준점"을 만든다: (가장 오래된 말풍선의 시각 + 키). 키는 파일이면 "F:파일번호", 메시지면 "M:" + 번호를 20자리로 0 채움(ToString("D20"), 예: 123 → 00000000000000000123) — 문자열로 비교해도 번호 크기 순서가 맞도록. 서버는 이 기준점보다 앞선 것을 한 페이지(50개) 돌려준다(커서 기반 페이지).
         string beforeKey = oldest.File is ChatFile oldFile
             ? "F:" + oldFile.Info.FileId
             : "M:" + oldest.MessageId.ToString("D20", System.Globalization.CultureInfo.InvariantCulture);
