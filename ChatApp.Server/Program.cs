@@ -139,7 +139,7 @@ if (schema < Db.RequiredSchemaVersion)
 if (!fileRepository.TableExists())
 {
     log.Error("DB에 files 테이블이 없어 파일 전송을 쓸 수 없습니다. (채팅은 정상 동작)");
-    log.Error(@"cmd에서 실행: ""C:\Program Files\MariaDB 13.0\bin\mysql.exe"" -u root -p chatapp < ""C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_002_files.sql""");
+    log.Error(@"cmd에서 실행: ""C:\Program Files\MariaDB 13.0\bin\mysql.exe"" -u root -p chatapp < ""db\migrate_002_files.sql""  (프로젝트 폴더에서 실행)");
 }
 
 // ── TLS 인증서 ──

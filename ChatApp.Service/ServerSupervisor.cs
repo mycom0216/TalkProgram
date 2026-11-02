@@ -13,12 +13,24 @@ namespace ChatApp.Service;
 //      서버는 콘솔로도, 서비스로도 똑같이 돈다 → 개발할 때(F5)와 운영할 때 동작이 같다.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// <summary>서버 프로세스를 감시하고 예기치 않게 종료되면 다시 시작하는 Windows 서비스 호스트.</summary>
-public sealed class ServerSupervisor(ILogger<ServerSupervisor> logger) : BackgroundService
+/// <summary>감독 동작 설정. 운영에서는 기본값을 쓰고, 테스트에서만 가짜 서버 경로와 짧은 시간을 넣는다.</summary>
+public sealed record ServerSupervisorOptions
 {
-    private static readonly TimeSpan QuitTimeout = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan HealthyRun = TimeSpan.FromMinutes(10);
-    private static readonly int[] RestartDelaysSeconds = [5, 10, 20, 40, 60];
+    /// <summary>실행할 서버 파일. 기본: 서비스 폴더\ChatApp.Server\ChatApp.Server.exe</summary>
+    public string ServerExePath { get; init; } = Path.Combine(AppContext.BaseDirectory, "ChatApp.Server", "ChatApp.Server.exe");
+    /// <summary>중지 때 "/quit"을 보낸 뒤 정상 종료를 기다리는 시간(넘으면 강제 종료).</summary>
+    public TimeSpan QuitTimeout { get; init; } = TimeSpan.FromSeconds(20);
+    /// <summary>이 시간보다 오래 돌았으면 "잘 돌았다"고 보고 재시작 간격을 처음으로 되돌린다.</summary>
+    public TimeSpan HealthyRun { get; init; } = TimeSpan.FromMinutes(10);
+    /// <summary>연달아 죽을 때 재시작 전에 기다리는 시간(실패 횟수 순서, 마지막 값을 계속 쓴다).</summary>
+    public TimeSpan[] RestartDelays { get; init; } = [TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(40), TimeSpan.FromSeconds(60)];
+}
+
+/// <summary>서버 프로세스를 감시하고 예기치 않게 종료되면 다시 시작하는 Windows 서비스 호스트.</summary>
+public sealed class ServerSupervisor(ILogger<ServerSupervisor> logger, ServerSupervisorOptions? options = null) : BackgroundService
+{
+    // [읽는 법] options를 안 넘기면(운영: 호스트가 등록 없이 만든다) 위 기본값을 쓴다.
+    private readonly ServerSupervisorOptions _options = options ?? new();
 
     private Process? _server;
     private readonly object _gate = new();
@@ -27,7 +39,7 @@ public sealed class ServerSupervisor(ILogger<ServerSupervisor> logger) : Backgro
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        string serverExe = Path.Combine(AppContext.BaseDirectory, "ChatApp.Server", "ChatApp.Server.exe");
+        string serverExe = _options.ServerExePath;
         if (!File.Exists(serverExe)) throw new FileNotFoundException("서비스 배포 폴더에 ChatApp.Server\\ChatApp.Server.exe가 없습니다.", serverExe);
 
         int failures = 0;
@@ -70,10 +82,10 @@ public sealed class ServerSupervisor(ILogger<ServerSupervisor> logger) : Backgro
             }
             if (_stopping || stoppingToken.IsCancellationRequested) break;
 
-            failures = DateTime.UtcNow - startedAt > HealthyRun ? 1 : failures + 1;
-            int delay = RestartDelaysSeconds[Math.Min(failures, RestartDelaysSeconds.Length) - 1];
-            logger.LogWarning("Restarting ChatApp.Server in {Delay} seconds (failure #{Count})", delay, failures);
-            try { await Task.Delay(TimeSpan.FromSeconds(delay), stoppingToken); }
+            failures = DateTime.UtcNow - startedAt > _options.HealthyRun ? 1 : failures + 1;
+            TimeSpan delay = _options.RestartDelays[Math.Min(failures, _options.RestartDelays.Length) - 1];
+            logger.LogWarning("Restarting ChatApp.Server in {Delay} seconds (failure #{Count})", delay.TotalSeconds, failures);
+            try { await Task.Delay(delay, stoppingToken); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -90,7 +102,7 @@ public sealed class ServerSupervisor(ILogger<ServerSupervisor> logger) : Backgro
                 await server.StandardInput.WriteLineAsync("/quit");
                 await server.StandardInput.FlushAsync(cancellationToken);
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(QuitTimeout);
+                timeout.CancelAfter(_options.QuitTimeout);
                 await server.WaitForExitAsync(timeout.Token);
                 logger.LogInformation("ChatApp.Server stopped normally");
             }

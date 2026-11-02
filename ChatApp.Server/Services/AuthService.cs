@@ -50,7 +50,7 @@ namespace ChatApp.Server.Services;
 //   ※ "성공 기록"은 여기서 하지 않는다. 중복 접속 확인까지 통과한 뒤 PacketHandler가 RecordLoginSuccess를 부른다.
 //
 // ■ 이 파일에서 나오는 개념과 검색어
-//   - 해시 + salt, PBKDF2(반복 100,000회, SHA-256) ........ "password hashing PBKDF2 salt iterations"
+//   - 해시 + salt, PBKDF2(반복 600,000회, SHA-256) ........ "password hashing PBKDF2 salt iterations"
 //   - 상수 시간 비교(FixedTimeEquals, PasswordHasher) ..... "constant time comparison timing attack"
 //   - 계정 열거(enumeration) 방지: 같은 문구 + 같은 시간 ... "user enumeration timing attack login"
 //   - 무차별 대입 방어: 실패 횟수 잠금 ...................... "brute force account lockout"
@@ -60,7 +60,7 @@ namespace ChatApp.Server.Services;
 //
 // ■ 면접 예상 질문과 답
 //   Q1. 비밀번호를 어떻게 저장하나요?
-//       A. 원문은 저장하지 않고, 사람마다 다른 무작위 salt(16바이트)를 붙여 PBKDF2-SHA256으로 100,000번 반복한 해시(32바이트)만 저장합니다. 해시는 되돌릴 수 없고, salt 덕분에 같은 비밀번호도 해시가 달라 미리 계산한 표 공격이 어렵습니다. 반복 횟수는 무차별 대입을 느리게 만듭니다.
+//       A. 원문은 저장하지 않고, 사람마다 다른 무작위 salt(16바이트)를 붙여 PBKDF2-SHA256으로 600,000번 반복한 해시(32바이트)만 저장합니다. 해시는 되돌릴 수 없고, salt 덕분에 같은 비밀번호도 해시가 달라 미리 계산한 표 공격이 어렵습니다. 반복 횟수는 무차별 대입을 느리게 만듭니다.
 //   Q2. 사원번호가 틀렸을 때와 비밀번호가 틀렸을 때 같은 문구를 쓰는 이유는요?
 //       A. 다르게 알려 주면 공격자가 "이 사원번호는 존재한다"는 정보를 얻어 그 계정만 집중 공격할 수 있습니다(계정 열거). 응답 "시간"도 같아야 해서, 없는 사원번호에도 가짜 해시로 같은 계산을 한 번 합니다.
 //   Q3. 로그인 실패 5회 잠금은 어떻게 구현했고, 동시에 여러 연결로 시도하면요?
@@ -295,6 +295,18 @@ public sealed class AuthService
             case "PENDING": return (null, "관리자 승인 대기 중인 계정입니다.");
             case "SUSPENDED": return (null, "정지된 계정입니다. 관리자에게 문의하세요.");
             case "RESIGNED": return (null, "사용할 수 없는 계정입니다.");
+        }
+
+        // [왜] 옛 반복 횟수(10만)로 저장된 해시는 비밀번호를 아는 지금(로그인 성공 직후)에만 새 횟수로 다시 만들 수 있다.
+        //      실패해도 로그인 자체는 막지 않는다(다음 로그인 때 다시 시도).
+        if (user.AuthSource == "LOCAL" && user.PasswordHash is not null && PasswordHasher.NeedsRehash(user.PasswordHash))
+        {
+            try
+            {
+                var (newHash, newSalt) = PasswordHasher.Hash(req.Password);
+                _users.UpgradePasswordHash(user.EmployeeNo, user.PasswordHash, newHash, newSalt);
+            }
+            catch (System.Data.Common.DbException) { }
         }
 
         // [읽는 법] LDAP 로그인에 성공했고 프로필을 받았다면 이름·부서·직급을 DB에 동기화하고, 갱신된 행을 다시 읽는다(?? user = 못 읽으면 기존 값 사용). 단, 계정을 새로 만들거나 권한을 주지는 않는다 — 이미 DB에 있는 사용자만 대상이다.

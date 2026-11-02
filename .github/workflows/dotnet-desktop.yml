@@ -37,6 +37,10 @@ jobs:
       - name: Test
         run: dotnet test ChatApp.Tests/ChatApp.Tests.csproj --configuration ${{ matrix.configuration }} --no-build --verbosity normal --logger "trx;LogFileName=tests.trx" --results-directory TestResults
 
+      # 서비스 감독(ChatApp.Service) 테스트. 임시 폴더의 가짜 서버(.cmd)를 쓰므로 DB·화면 없이 windows-latest에서 돈다.
+      - name: Test (Service)
+        run: dotnet test ChatApp.Service.Tests/ChatApp.Service.Tests.csproj --configuration ${{ matrix.configuration }} --no-build --verbosity normal --logger "trx;LogFileName=service-tests.trx" --results-directory TestResults
+
       # 실패했을 때 어떤 테스트가 깨졌는지 내려받아 볼 수 있게 결과 파일을 남긴다
       - name: Upload test results
         if: always()

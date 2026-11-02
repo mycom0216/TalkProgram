@@ -181,9 +181,21 @@ public sealed class ServerConfig
             ReadCommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true,
         };
-        return JsonSerializer.Deserialize<ServerConfig>(json, options)
+        ServerConfig config = JsonSerializer.Deserialize<ServerConfig>(json, options)
                // [읽는 법] Deserialize는 파일 내용이 JSON의 null일 때 null을 돌려준다. ?? throw는 "null이면 예외를 던진다"는 한 줄 표현이다. (JSON 문법 오류는 JsonException으로 따로 발생한다.)
                ?? throw new InvalidDataException("appsettings.json 내용이 비어 있습니다.");
+        ApplyEnvironmentOverrides(config, Environment.GetEnvironmentVariable);
+        return config;
+    }
+
+    /// <summary>환경 변수에 비밀 값이 있으면 appsettings.json의 값보다 우선한다. 이름: CHATAPP_CONNECTION_STRING, CHATAPP_TLS_CERT_PASSWORD.</summary>
+    // [왜] DB 비밀번호와 인증서 비밀번호를 파일에 평문으로 두지 않고 서비스 계정의 환경 변수(서비스 레지스트리 Environment 값)로 줄 수 있게 한다.
+    //      환경 변수가 없으면 아무것도 바꾸지 않으므로 기존 appsettings.json 방식도 그대로 동작한다.
+    // [읽는 법] 값을 읽는 함수를 매개변수로 받아서, 테스트가 진짜 환경 변수를 건드리지 않고 가짜 값으로 확인할 수 있다.
+    public static void ApplyEnvironmentOverrides(ServerConfig config, Func<string, string?> getVariable)
+    {
+        if (getVariable("CHATAPP_CONNECTION_STRING") is { Length: > 0 } connection) config.ConnectionString = connection;
+        if (getVariable("CHATAPP_TLS_CERT_PASSWORD") is { Length: > 0 } certPassword) config.Tls.CertificatePassword = certPassword;
     }
 }
 

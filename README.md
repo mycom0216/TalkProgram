@@ -22,7 +22,9 @@ ChatApp.slnx
 ├─ ChatApp.Client/         WinForms 클라이언트 "사내톡" (로그인, 친구 목록 창, 1:1·채팅방 대화창)
 ├─ ChatApp.ConsoleClient/  검증용 콘솔 클라이언트
 ├─ ChatApp.LoadTest/       부하 테스트 도구 (가상 사용자 N명)
+├─ ChatApp.Service/        서버를 Windows 서비스로 돌리는 감독 프로그램 (죽으면 다시 켬)
 ├─ ChatApp.Tests/          단위·통합 테스트 (xUnit, DB 없이 실행)
+├─ ChatApp.Service.Tests/  서비스 감독 테스트 (xUnit, 가짜 서버 사용, Windows 전용)
 ├─ db/                     DB 스키마와 마이그레이션 스크립트
 ├─ docs/ARCHITECTURE.md    아키텍처 문서 (구성도·스레드·프로토콜·DB·보안)
 ├─ docs/SERVICE.md         서버 운영 가이드 (Windows 서비스 등록·업데이트·문제 해결)
@@ -134,6 +136,7 @@ dotnet run --project ChatApp.ConsoleClient       # 창을 2~3개 띄워서 테�
 
 ```bash
 dotnet test ChatApp.Tests      # 또는 Visual Studio: 테스트 → 모든 테스트 실행
+dotnet test ChatApp.Service.Tests   # 서비스 감독 (Windows 전용)
 ```
 
 - 패킷 직렬화, 패킷 경계(TCP 분할 수신), 파일 이름 정리, 비밀번호 해시, 설정 파일, TLS 지문 고정, 실제 서버에 소켓 접속 등을 확인하는 단위·통합 테스트를 실행한다.
@@ -160,6 +163,8 @@ dotnet run --project ChatApp.LoadTest -c Release -- 127.0.0.1 9000 300 20 2000  
 | 300명 | 148개/초 | 42,177개/초 | 0 | 0 | 129ms / 515ms | 178MB | 15.4초 |
 | 500명 | 99개/초 | 46,771개/초 | 0 | 0 | 276ms / 867ms | 287MB | 31.9초 |
 | 300명 **TLS** | 149개/초 | 43,202개/초 | 0 | 0 | 178ms / 567ms | 232MB | 18.8초 |
+
+참고: 위 표는 비밀번호 해시(PBKDF2)가 10만 회일 때 잰 값이다. 지금은 60만 회(OWASP 권장)라서 로그인 한 번의 계산이 약 6배(약 11ms → 64ms, .NET 10 기준) 길어졌다. 메시지 전달 지연에는 영향이 없고, 많은 사용자가 한꺼번에 로그인할 때의 "로그인 전체" 시간만 늘어난다. 옛 해시는 로그인할 때 자동으로 새 방식으로 바뀐다.
 
 TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리가 178MB에서 232MB로 늘었다. 테스트 도구 300명분의 암호화도 같은 2코어에서 돌아간 결과라서, 실제 서버에서는 차이가 더 작다.
 

@@ -327,6 +327,26 @@ public sealed class UserRepository(Db db)
         return updated;
     }
 
+    /// <summary>
+    /// 로그인에 성공한 사용자의 옛 해시를 새 해시로 바꾼다(반복 횟수 업그레이드).
+    /// UpdatePassword와 달리 잠금·임시 비밀번호 표시·자동 로그인 토큰은 건드리지 않는다(비밀번호는 그대로이므로).
+    /// </summary>
+    // [읽는 법] WHERE에 "옛 해시 그대로"를 넣어서, 그 사이 비밀번호가 바뀌었다면 덮어쓰지 않는다(0행 → false).
+    public bool UpgradePasswordHash(string employeeNo, string oldHash, string newHash, string newSalt)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            UPDATE users SET password_hash = @new, salt = @salt
+            WHERE employee_no = @no AND auth_source = 'LOCAL' AND password_hash = @old
+            """;
+        cmd.AddParam("@new", newHash);
+        cmd.AddParam("@salt", newSalt);
+        cmd.AddParam("@no", employeeNo);
+        cmd.AddParam("@old", oldHash);
+        return cmd.ExecuteNonQuery() == 1;
+    }
+
     // ───────── 관리자 기능 ─────────
 
     /// <summary>회원 목록 (상태로 거르기, null이면 전체). 최근 가입 순.</summary>

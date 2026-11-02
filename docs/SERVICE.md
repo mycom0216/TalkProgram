@@ -74,7 +74,27 @@ flowchart LR
 `uninstall-server-service.bat`을 관리자 권한으로 실행 → 서비스를 정상 종료한 뒤 등록과 방화벽 규칙을 지운다.
 프로그램·업로드 파일·로그·DB는 지우지 않는다.
 
-## 6. 문제 해결
+## 6. 운영 보안 설정
+
+서버 PC에는 두 가지 비밀이 있다. DB 비밀번호(`appsettings.json`)와 서버 인증서의 개인 키(`certs\server.pfx`)다.
+
+| 항목 | 방법 |
+| --- | --- |
+| 파일 접근 권한 | `install-server-service.bat`이 설치할 때 `appsettings.json`과 `certs` 폴더를 **SYSTEM과 관리자만** 읽도록 제한한다(일반 사용자 읽기 권한 제거). 서비스는 SYSTEM 계정으로 돌기 때문에 동작에는 영향이 없다. 파일을 새로 복사했다면 설치 파일을 다시 실행한다 |
+| 비밀번호를 파일에 두지 않기 | 환경 변수가 있으면 `appsettings.json`보다 우선한다. `CHATAPP_CONNECTION_STRING`(DB 접속 문자열 전체), `CHATAPP_TLS_CERT_PASSWORD`(.pfx 비밀번호). 서비스에 주려면 관리자 CMD에서 아래 명령을 한 번 실행하고 서비스를 다시 시작한다 |
+| 인증서 | 기본은 자체 서명 인증서(클라이언트가 처음 접속할 때 지문을 확인하고 저장). 회사 CA 인증서가 있으면 `Tls.CertificatePath`·`CertificatePassword`에 넣어 지문 확인 창을 없앤다 |
+
+```
+reg add "HKLM\SYSTEM\CurrentControlSet\Services\ChatApp Server" /v Environment /t REG_MULTI_SZ /d "CHATAPP_CONNECTION_STRING=Server=localhost;Port=3306;Database=chatapp;User ID=chatapp;Password=실제비밀번호;\0CHATAPP_TLS_CERT_PASSWORD=인증서비밀번호" /f
+sc stop "ChatApp Server"
+sc start "ChatApp Server"
+```
+
+- 위 명령의 `\0`은 항목을 나누는 구분자다. 값에 `;`가 들어 있어도 따옴표 안에 있으면 그대로 들어간다.
+- 환경 변수는 레지스트리에 저장되므로 관리자만 볼 수 있다. 그래도 `appsettings.json`의 비밀번호 칸을 비워 두려면 `ConnectionString`에 `Server=localhost;...`만 두고 비밀번호는 환경 변수 쪽에만 둔다.
+- DB 계정은 서버가 쓰는 `chatapp` 계정(해당 DB의 권한만 가짐)을 쓰고, root 계정은 쓰지 않는다.
+
+## 7. 문제 해결
 
 | 증상 | 확인할 것 |
 | --- | --- |
