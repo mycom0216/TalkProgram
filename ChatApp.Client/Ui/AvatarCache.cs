@@ -54,6 +54,7 @@ namespace ChatApp.Client.Ui;
 //   - 메모리 캐시에는 개수 제한이 없다(회사 규모의 사진 수라면 충분하지만, 아주 큰 규모에서는 LRU 같은 제한이 필요).
 //   - 여러 곳에서 Get()으로 같은 Image 객체를 공유해 그린다. 그 객체를 호출한 쪽이 Dispose하면 안 된다(소유는 이 캐시).
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>프로필·배경 사진을 서버에서 받아 메모리와 디스크(dataFolder\photos)에 보관하는 캐시.</summary>
 internal sealed class AvatarCache(ChatClient client, string dataFolder)
 {
     private readonly string _dir = Path.Combine(dataFolder, "photos");
@@ -72,8 +73,13 @@ internal sealed class AvatarCache(ChatClient client, string dataFolder)
     /// <summary>배경 사진 (없으면 null → 기본 그라데이션).</summary>
     public Image? GetBackground(string? employeeNo) => Find(PhotoKind.Background, employeeNo);
 
+    /// <summary>사용자 정보에 적힌 프로필 사진 버전을 알린다. 캐시에 없으면 디스크에서 읽거나 서버에 요청한다.</summary>
     public void Note(UserInfo user) => Note(user.EmployeeNo, user.PhotoVersion);
+
+    /// <summary>사원번호의 프로필 사진 버전을 알린다. version이 0 이하면 사진이 없다는 뜻이라 캐시에서 지운다.</summary>
     public void Note(string employeeNo, long version) => Note(PhotoKind.Profile, employeeNo, version);
+
+    /// <summary>사용자 정보에 적힌 배경 사진 버전을 알린다. 캐시에 없으면 디스크에서 읽거나 서버에 요청한다.</summary>
     public void NoteBackground(UserInfo user) => Note(PhotoKind.Background, user.EmployeeNo, user.BackgroundVersion);
 
     private Image? Find(PhotoKind kind, string? no) => no is not null && _images.TryGetValue((kind, no), out var e) ? e.Image : null;
@@ -173,8 +179,11 @@ internal sealed class AvatarCache(ChatClient client, string dataFolder)
     /// <summary>사원번호는 대소문자를 구분하지 않는다.</summary>
     private sealed class KeyComparer : IEqualityComparer<(PhotoKind Kind, string No)>
     {
+        /// <summary>사진 종류가 같고 사원번호가 대소문자 무시로 같으면 같은 키로 본다.</summary>
         public bool Equals((PhotoKind Kind, string No) x, (PhotoKind Kind, string No) y)
             => x.Kind == y.Kind && string.Equals(x.No, y.No, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Equals와 맞도록 사진 종류와 대소문자 무시 사원번호로 해시를 만든다.</summary>
         public int GetHashCode((PhotoKind Kind, string No) key)
             => HashCode.Combine(key.Kind, StringComparer.OrdinalIgnoreCase.GetHashCode(key.No));
     }

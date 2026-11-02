@@ -55,6 +55,7 @@ namespace ChatApp.Server.Services;
 //   - 정리 중에 채팅이 느려진다 ................ BatchSize(5000)와 쉬는 시간(200ms)을 줄여서 한 번에 잠기는 시간을 줄여 본다
 //   - 지금 당장 정리하고 싶다 .................. 서버 콘솔에서 /cleanup
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>보관 기간이 지난 대화·파일·감사 로그를 전용 스레드가 하루에 한 번 지우는 서비스.</summary>
 // [읽는 법] 필요한 부품: db(DB 연결), files(디스크 파일 삭제), config(보관 기간 설정), log. ": IDisposable"은 서버를 끌 때 Dispose()로 스레드를 정리한다는 약속이다.
 public sealed class RetentionService(Db db, FileService files, ServerConfig config, ServerLogger log) : IDisposable
 {
@@ -62,6 +63,7 @@ public sealed class RetentionService(Db db, FileService files, ServerConfig conf
     private readonly CancellationTokenSource _stop = new();
     private Thread? _thread;
 
+    /// <summary>정리 스레드를 시작한다 (시작 1분 뒤 첫 정리, 이후 24시간마다).</summary>
     public void Start()
     {
         // [읽는 법] 전용 스레드 하나를 만든다. IsBackground = true는 서버가 끝나면 이 스레드도 같이 끝나도록(프로세스를 붙잡지 않도록) 하는 설정이고, Name은 디버거·로그에서 알아보기 위한 이름이다.
@@ -177,6 +179,7 @@ public sealed class RetentionService(Db db, FileService files, ServerConfig conf
         return cmd.ExecuteNonQuery();
     }
 
+    /// <summary>정리 스레드에 종료 신호를 보내고 최대 2초 기다린다.</summary>
     public void Dispose()
     {
         _stop.Cancel();

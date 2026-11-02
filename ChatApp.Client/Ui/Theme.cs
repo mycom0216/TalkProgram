@@ -59,27 +59,61 @@ internal static class Theme
 {
     // [개념] const는 컴파일할 때 값이 박히는 상수(문자열·숫자만 가능),
     //        static readonly는 프로그램 실행 중 한 번 만들어지는 상수(Color, Font 같은 객체도 가능).
+    /// <summary>프로그램 이름 ("사내톡"). 창 제목과 로그인 화면에 쓴다.</summary>
     public const string AppName = "사내톡";
     private const string FontName = "맑은 고딕";
 
     // ── 색 ──
     // [개념] Color.FromArgb(R, G, B): 빨강·초록·파랑을 0~255로 섞은 색. FromArgb(A, R, G, B)처럼 4개면 A는 투명도(0=투명, 255=불투명).
-    public static readonly Color SkyLight = Color.FromArgb(125, 196, 255);   // 그라데이션 위
-    public static readonly Color SkyDark = Color.FromArgb(40, 118, 228);     // 그라데이션 아래
-    public static readonly Color Primary = Color.FromArgb(38, 120, 235);     // 버튼, 내 말풍선
-    public static readonly Color Background = Color.FromArgb(238, 245, 255); // 목록 머리줄, 대화 배경
+    /// <summary>그라데이션 머리 영역의 위쪽 밝은 하늘색.</summary>
+    public static readonly Color SkyLight = Color.FromArgb(125, 196, 255);
+
+    /// <summary>그라데이션 머리 영역의 아래쪽 진한 파랑 (막대그래프에서 마우스를 올린 막대에도 쓴다).</summary>
+    public static readonly Color SkyDark = Color.FromArgb(40, 118, 228);
+
+    /// <summary>대표 파랑: 강조 버튼, 내 말풍선, 선택·강조 표시에 쓴다.</summary>
+    public static readonly Color Primary = Color.FromArgb(38, 120, 235);
+
+    /// <summary>목록 머리줄과 연한 패널 배경에 쓰는 아주 연한 하늘색.</summary>
+    public static readonly Color Background = Color.FromArgb(238, 245, 255);
+
+    /// <summary>대화 화면(말풍선 영역)의 배경색.</summary>
     public static readonly Color ChatBackground = Color.FromArgb(226, 239, 255);
+
+    /// <summary>카드, 창, 상대 말풍선의 흰색 바탕.</summary>
     public static readonly Color Surface = Color.White;
+
+    /// <summary>카드, 상대 말풍선, 알림 창 같은 요소의 연한 파랑 테두리색.</summary>
     public static readonly Color Border = Color.FromArgb(200, 220, 243);
+
+    /// <summary>기본 글자색 (진한 남색).</summary>
     public static readonly Color Text = Color.FromArgb(30, 41, 59);
+
+    /// <summary>설명·시각 같은 보조 글자색 (회색빛 파랑).</summary>
     public static readonly Color SubText = Color.FromArgb(100, 116, 139);
+
+    /// <summary>그라데이션 머리 위에 쓰는 부제목 글자색 (밝은 하늘색).</summary>
     public static readonly Color HeaderSubText = Color.FromArgb(225, 239, 255);
+
+    /// <summary>목록에서 마우스를 올린 줄의 배경색.</summary>
     public static readonly Color Hover = Color.FromArgb(235, 244, 255);
+
+    /// <summary>목록에서 선택된 줄의 배경색.</summary>
     public static readonly Color Selected = Color.FromArgb(214, 232, 255);
+
+    /// <summary>접속 중(온라인) 상태 점의 초록색.</summary>
     public static readonly Color Online = Color.FromArgb(34, 197, 94);
+
+    /// <summary>접속하지 않은 상태 점이나 꺼진(처리 중) 버튼에 쓰는 회색.</summary>
     public static readonly Color Offline = Color.FromArgb(148, 163, 184);
+
+    /// <summary>오류·실패·위험을 나타내는 빨강.</summary>
     public static readonly Color Danger = Color.FromArgb(220, 38, 38);
+
+    /// <summary>공지·주의 안내를 나타내는 주황 (상태 줄 알림, 사용량 80% 넘음 등).</summary>
     public static readonly Color Notice = Color.FromArgb(217, 119, 6);
+
+    /// <summary>안 읽은 수 배지의 빨간 배경색.</summary>
     public static readonly Color Badge = Color.FromArgb(239, 68, 68);
 
     // 아바타 배경으로 돌아가며 쓰는 8가지 색 (사람마다 AvatarColor로 하나가 정해진다)
@@ -93,11 +127,22 @@ internal static class Theme
     // ── 글꼴 (pt 단위라 DPI에 맞춰 자동으로 커진다) ──
     // [개념] pt(포인트)는 인쇄 단위(1pt = 1/72인치)라서 화면 배율이 125%, 150%로 커지면 픽셀 크기도 함께 커진다.
     // [주의] Font도 GDI 자원이지만 여기 것들은 프로그램이 끝날 때까지 계속 쓰므로 일부러 Dispose하지 않는다.
+    /// <summary>본문 기본 글꼴: 맑은 고딕 10pt.</summary>
     public static readonly Font Body = new(FontName, 10F);
+
+    /// <summary>본문 굵은 글꼴: 맑은 고딕 10pt 굵게.</summary>
     public static readonly Font BodyBold = new(FontName, 10F, FontStyle.Bold);
+
+    /// <summary>시각·설명·알림 같은 작은 글꼴: 맑은 고딕 8.5pt.</summary>
     public static readonly Font Small = new(FontName, 8.5F);
+
+    /// <summary>작은 굵은 글꼴: 맑은 고딕 8.5pt 굵게 (배지, 부서 머리줄, 보낸 사람 이름).</summary>
     public static readonly Font SmallBold = new(FontName, 8.5F, FontStyle.Bold);
+
+    /// <summary>머리 영역의 제목 글꼴: 맑은 고딕 12pt 굵게.</summary>
     public static readonly Font Title = new(FontName, 12F, FontStyle.Bold);
+
+    /// <summary>로그인 화면의 프로그램 이름처럼 아주 큰 글꼴: 맑은 고딕 22pt 굵게.</summary>
     public static readonly Font Big = new(FontName, 22F, FontStyle.Bold);
 
     /// <summary>사람(사원번호)마다 항상 같은 아바타 색. string.GetHashCode는 실행마다 바뀌므로 직접 계산.</summary>
@@ -161,8 +206,6 @@ internal static class Theme
         g.DrawPath(pen, path);
     }
 
-    /// <summary>동그란 이니셜 아바타 (이름 첫 글자).</summary>
-    // [왜] 사진 프로필 기능이 아직 없으므로, 색 동그라미 + 이름 첫 글자로 사람을 구분한다(카카오톡 기본 프로필과 비슷한 역할).
     /// <summary>
     /// 프로필 사진 찾기 (사원번호 → 사진, 없으면 null). 메인 창이 로그인 뒤 AvatarCache.Get으로 채운다.
     /// [왜] 아바타를 그리는 곳(목록·말풍선·대화창 머리·알림 창)이 여러 군데라, 각각에 사진 보관함을 넘기는 대신 한곳에서 찾게 한다.
@@ -192,6 +235,7 @@ internal static class Theme
         g.DrawEllipse(ring, r); // 흰 배경 사진도 테두리가 보이게
     }
 
+    /// <summary>이니셜 아바타: 사각형 r 안에 color 원을 그리고 name의 첫 글자를 흰색으로 쓴다.</summary>
     public static void DrawAvatar(Graphics g, Rectangle r, string name, Color color)
     {
         // [개념] 안티앨리어싱(AntiAlias): 원·곡선의 가장자리 픽셀을 중간색으로 칠해 계단 현상 없이 매끄럽게 보이게 한다.
@@ -229,9 +273,14 @@ internal static class Theme
         _ => "",
     };
 
-    public static readonly Color Away = Color.FromArgb(234, 179, 8);       // 자리 비움 (노랑)
-    public static readonly Color MentionBack = Color.FromArgb(255, 247, 214); // @멘션 말풍선 배경
-    public static readonly Color SearchHit = Color.FromArgb(253, 230, 138);   // 검색 결과 강조
+    /// <summary>자리 비움 상태의 노랑 (멘션 말풍선 테두리, 현재 검색 결과 강조에도 쓴다).</summary>
+    public static readonly Color Away = Color.FromArgb(234, 179, 8);
+
+    /// <summary>나를 "@이름"으로 부른 말풍선의 배경색 (연한 노랑).</summary>
+    public static readonly Color MentionBack = Color.FromArgb(255, 247, 214);
+
+    /// <summary>대화 검색 결과 말풍선 뒤에 깔아 강조하는 노랑.</summary>
+    public static readonly Color SearchHit = Color.FromArgb(253, 230, 138);
 
     /// <summary>색을 직접 정하는 상태 점 (흰 테두리 + 색).</summary>
     // [읽는 법] "흰 큰 원 → 색 작은 원" 두 번 칠해 흰 테두리를 만든다. 테두리 두께는 지름의 1/5(Inflate에 음수 = 안쪽으로 줄이기).

@@ -56,6 +56,7 @@ namespace ChatApp.Client.Forms;
 //   - 동료 찾기에 사람이 안 나온다 ........... PeoplePickerForm의 Directory 요청(서버 30초 캐시), 제외 목록([_me.EmployeeNo])
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메인 창(partial) - 전체 대화 검색과 동료 찾기 부분.</summary>
 public sealed partial class MainForm
 {
     // ───────────────────────── 전체 검색·동료 찾기·로그아웃·업데이트 ─────────────────────────

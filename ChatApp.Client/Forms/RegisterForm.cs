@@ -68,9 +68,11 @@ public sealed class RegisterForm : Form
     private readonly Label _domainHint = new() { AutoSize = true, ForeColor = UiHelper.Muted, Margin = new Padding(0, 0, 0, 12) };
     private readonly Label _status = new() { AutoSize = true, ForeColor = UiHelper.Muted, Margin = new Padding(0, 10, 0, 0) };
 
+    /// <summary>가입에 성공한 사원번호 (가입 전에는 빈 문자열). 로그인 창이 사원번호 칸을 채우는 데 쓴다.</summary>
     // [왜] private set: 바깥(LoginForm)은 읽기만, 값은 가입 성공 때 이 창만 채운다. 로그인 창이 사원번호 입력칸을 자동으로 채우는 데 쓴다.
     public string RegisteredEmployeeNo { get; private set; } = "";
 
+    /// <summary>회원가입 창을 만든다. client로 가입 요청을 서버에 보낸다.</summary>
     public RegisterForm(ChatClient client)
     {
         _client = client;

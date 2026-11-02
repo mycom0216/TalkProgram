@@ -52,13 +52,20 @@ namespace ChatApp.Client.Chat;
 //   switch에서 빠뜨린 경우를 찾기 쉽다.
 internal enum FileState
 {
-    Uploading,    // 내가 보내는 중 (Percent)
-    Processing,   // 다 보냈고 서버가 저장하는 중
-    Ready,        // 대화에 올라감 (받을 수 있음)
-    Downloading,  // 받는 중 (Percent)
-    Queued,       // 받기를 눌렀지만 차례를 기다리는 중 (동시에 3개까지만 받으므로)
-    Failed,       // 보내기 실패 (Error)
-    Canceled,     // 내가 보내기를 취소함
+    /// <summary>내가 보내는 중 (Percent)</summary>
+    Uploading,
+    /// <summary>다 보냈고 서버가 저장하는 중</summary>
+    Processing,
+    /// <summary>대화에 올라감 (받을 수 있음)</summary>
+    Ready,
+    /// <summary>받는 중 (Percent)</summary>
+    Downloading,
+    /// <summary>받기를 눌렀지만 차례를 기다리는 중 (동시에 3개까지만 받으므로)</summary>
+    Queued,
+    /// <summary>보내기 실패 (Error)</summary>
+    Failed,
+    /// <summary>내가 보내기를 취소함</summary>
+    Canceled,
 }
 
 /// <summary>
@@ -67,12 +74,18 @@ internal enum FileState
 /// </summary>
 internal sealed class ChatFile
 {
+    /// <summary>이 말풍선에 붙은 파일의 서버 정보(이름·크기·파일 ID 등). 만들 때 반드시 지정한다.</summary>
     // [개념] required: 객체를 만들 때 반드시 값을 넣어야 하는 속성. new ChatFile { Info = ... } 처럼 빠뜨리면 컴파일 오류.
     //   파일 정보 없는 파일 말풍선은 의미가 없으므로 실수를 컴파일 단계에서 막는다.
     public required SharedFile Info { get; set; }
+    /// <summary>파일의 현재 전송 상태 (기본값은 Ready).</summary>
     public FileState State { get; set; } = FileState.Ready;
-    public int Percent { get; set; }   // 0~100, Uploading/Downloading일 때 진행 막대에 쓰인다
-    public string? Error { get; set; } // Failed일 때 말풍선에 보여 줄 실패 이유
+
+    /// <summary>전송 진행률(0~100). Uploading/Downloading일 때 진행 막대에 쓰인다.</summary>
+    public int Percent { get; set; }
+
+    /// <summary>Failed일 때 말풍선에 보여 줄 실패 이유 (실패가 아니면 null).</summary>
+    public string? Error { get; set; }
 
     /// <summary>내 PC에 있는 경로(내가 보낸 원본 또는 받은 파일). 있으면 열 때 다시 받지 않는다.</summary>
     public string? LocalPath { get; set; }
@@ -102,9 +115,11 @@ internal sealed class ChatFile
         }
     }
 
+    /// <summary>내 PC에 이 파일이 실제로 있는지 (LocalPath가 있고 그 경로에 파일이 존재할 때 true).</summary>
     // [주의] File.Exists는 디스크를 확인하므로, 사용자가 받은 파일을 지웠거나 옮겼으면 false가 되어 다시 받게 된다.
     public bool HasLocalFile => LocalPath is not null && File.Exists(LocalPath);
 
+    /// <summary>올리기·서버 저장·받기·대기 중 하나라서 지금 새 작업을 시작하면 안 되는 상태인지.</summary>
     // [개념] is A or B or C : C# 패턴 매칭. State == A || State == B || State == C 와 같다.
     // 전송 중에는 같은 파일을 또 열기/저장하지 못하게 막는 데 쓴다.
     // [읽는 법] "지금 전송 관련 작업 중인가?" 전송 중에 같은 파일을 또 열거나 저장하지 못하게 막는 용도. Ready/Failed/Canceled일 때만 새 작업을 시작할 수 있다.

@@ -49,6 +49,7 @@ namespace ChatApp.Client.Forms;
 //   - 원래 메시지가 지워져도 댓글은 달 수 있다(카카오톡과 같은 동작이라고 코드에 적혀 있음). 서버가 인용을 "삭제된 메시지입니다."로 바꿔 준다.
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메시지 하나에 달린 댓글만 모아 보여 주고 댓글을 쓰는 창.</summary>
 internal sealed class ThreadForm : Form
 {
     private readonly Conversation _conv;
@@ -65,12 +66,19 @@ internal sealed class ThreadForm : Form
     /// <summary>댓글 보내기 (보낼 글). 원래 메시지 번호는 ChatWindow가 붙인다.</summary>
     // [읽는 법] 아래 이벤트 4개가 이 창의 "바깥으로 나가는 문"이다: 보내기 / 공감 / 삭제 / 수정. 실제 처리와 서버 전송은 ChatWindow → MainForm이 한다.
     public event Action<string>? SendRequested;
+
+    /// <summary>공감을 누르거나 취소할 때 발생한다: (대화에 있는 말풍선, 이모지).</summary>
     public event Action<ChatItem, string>? ReactionRequested;
+
+    /// <summary>메시지 삭제를 요청할 때 발생한다. 인수는 대화에 있는 말풍선.</summary>
     public event Action<ChatItem>? DeleteRequested;
+
+    /// <summary>메시지 수정을 요청할 때 발생한다. 인수는 대화에 있는 말풍선.</summary>
     public event Action<ChatItem>? EditRequested;
 
     private int S(int v) => LogicalToDeviceUnits(v);
 
+    /// <summary>댓글 창을 만든다. root는 원래 메시지, canDelete/canEdit는 말풍선별 삭제·수정 가능 여부 규칙.</summary>
     public ThreadForm(Conversation conv, ChatItem root, string roomTitle, string myKey, Func<ChatItem, bool> canDelete, Func<ChatItem, bool> canEdit)
     {
         _conv = conv;
@@ -181,6 +189,7 @@ internal sealed class ThreadForm : Form
         _view.SetItems(clones);
     }
 
+    /// <summary>입력칸과 [전송] 버튼을 켜거나 끈다 (연결이 끊겼거나 방을 나갔을 때 끈다).</summary>
     // [읽는 법] 바깥(ChatWindow)이 연결이 끊겼거나 방에서 나갔을 때 입력을 막는 데 쓴다. 이 창은 왜 막는지는 모른다.
     public void SetInputEnabled(bool enabled)
     {

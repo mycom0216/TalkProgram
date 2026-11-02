@@ -61,6 +61,7 @@ namespace ChatApp.Client.Forms;
 //   - 로그아웃 후 프로그램이 종료된다 ......... LogoutRequested를 Program이 처리하는지
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메인 창(partial) - 친구 관리, 프로필 카드·사진, 휴대폰 번호 설정, 목록 오른쪽 클릭 메뉴 부분.</summary>
 public sealed partial class MainForm
 {
     // ───────────────────────── 친구 ─────────────────────────

@@ -123,12 +123,18 @@ public sealed class ClientSession
 
     /// <summary>상대 주소 "IP:포트" (로그용).</summary>
     public string RemoteEndPoint { get; }
+
+    /// <summary>이 연결이 TLS(SslStream)로 암호화되어 있으면 true.</summary>
     public bool IsTls => _stream is SslStream;
 
     /// <summary>로그인한 사용자 정보. 로그인 전에는 null.</summary>
     // [개념] internal set: 읽기는 누구나, 쓰기는 같은 프로젝트 안(SessionManager.Login)에서만.
     public UserInfo? User { get; internal set; }
+
+    /// <summary>로그인을 마친 상태(<see cref="User"/>가 null이 아님)이면 true.</summary>
     public bool IsLoggedIn => User is not null;
+
+    /// <summary>마지막으로 "입력 중" 알림을 처리한 시각 (Environment.TickCount64, 알림 간격 제한용).</summary>
     internal long LastTypingTicks;
 
     private readonly object _userLock = new();
@@ -156,6 +162,7 @@ public sealed class ClientSession
     public bool MustChangePassword { get => _mustChangePassword; internal set => _mustChangePassword = value; }
     private volatile bool _mustChangePassword;
 
+    /// <summary>이미 <see cref="Close"/>가 실행되어 연결이 닫혔으면 true (스레드 안전).</summary>
     // [개념] Volatile.Read: 다른 스레드가 Interlocked로 바꾼 최신 값을 확실히 읽어 온다(캐시된 옛 값 방지).
     public bool IsClosed => Volatile.Read(ref _closed) == 1;
 
@@ -195,6 +202,7 @@ public sealed class ClientSession
     /// <summary>상대 IP (IP당 연결 수 제한용). 알 수 없으면 null.</summary>
     public IPAddress? RemoteAddress { get; }
 
+    /// <summary>접속한 소켓으로 세션을 만든다. 스레드는 만들기만 하고 <see cref="Start"/>에서 시작한다.</summary>
     public ClientSession(TcpClient client, PacketHandler handler, SslStreamCertificateContext? tls = null,
                          long maxQueuedBytes = 64L * 1024 * 1024, int sendTimeoutMs = 120_000)
     {

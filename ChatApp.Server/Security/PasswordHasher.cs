@@ -60,6 +60,7 @@ public static class PasswordHasher
     private const int HashSize = 32;
     private const string Prefix = "pbkdf2-sha256$"; // "pbkdf2-sha256$600000$Base64해시" (password_hash VARCHAR(100)에 들어가는 길이)
 
+    /// <summary>비밀번호를 새 Salt와 최신 반복 횟수의 PBKDF2-SHA256으로 해시해 (해시 문자열, Base64 Salt)를 돌려준다.</summary>
     public static (string Hash, string Salt) Hash(string password)
     {
         byte[] salt = RandomNumberGenerator.GetBytes(SaltSize);
@@ -67,6 +68,7 @@ public static class PasswordHasher
         return ($"{Prefix}{Iterations}${Convert.ToBase64String(hash)}", Convert.ToBase64String(salt));
     }
 
+    /// <summary>입력한 비밀번호가 저장된 해시·Salt와 맞으면 true. 해시 형식이 깨졌으면 false (시간 차이로 정보가 새지 않게 비교).</summary>
     public static bool Verify(string password, string storedHash, string storedSalt)
     {
         if (!TryParse(storedHash, out int iterations, out byte[] expected)) return false;

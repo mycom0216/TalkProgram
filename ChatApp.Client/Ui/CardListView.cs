@@ -56,21 +56,47 @@ namespace ChatApp.Client.Ui;
 //        목록을 다시 그릴 때마다 새 CardItem을 만들어 통째로 교체하므로, 중간에 값이 바뀌지 않는 편이 안전하다.
 internal sealed class CardItem
 {
+    /// <summary>true면 부서 같은 그룹 머리줄 (누르면 접기/펼치기, 선택·열기 대상이 아님).</summary>
     public bool IsHeader { get; init; }
+
+    /// <summary>줄을 알아보는 고유 이름 ("user:A0001", "room:3", "dept:개발팀"). 선택·접힘 상태를 이 값으로 기억한다.</summary>
     // [왜] Key: 목록을 새로 만들어도 "같은 줄"을 알아보기 위한 고유 이름("user:A0001", "room:3", "dept:개발팀").
     //      선택 상태(_selectedKey)와 접힌 부서(_collapsed)를 객체가 아닌 Key로 기억하므로 목록을 교체해도 유지된다.
     public string Key { get; init; } = "";
+    /// <summary>줄의 이름(머리줄이면 그룹 이름). 한 줄로 그리고 길면 "..."로 줄인다.</summary>
     public string Title { get; init; } = "";
+
+    /// <summary>이름 아래에 작게 보이는 설명 (null이거나 비어 있으면 그리지 않는다).</summary>
     public string? Subtitle { get; init; }
+
+    /// <summary>사진이 없을 때 아바타 원 안에 쓸 글자 (null이면 Title로 그린다).</summary>
     public string? AvatarText { get; init; }
-    public string? PhotoKey { get; init; } // 프로필 사진을 찾을 사원번호 (없으면 이니셜)
+
+    /// <summary>프로필 사진을 찾을 사원번호 (없으면 사진 대신 이니셜).</summary>
+    public string? PhotoKey { get; init; }
+
+    /// <summary>아바타 원의 배경색 (기본값 Theme.Primary).</summary>
     public Color AvatarColor { get; init; } = Theme.Primary;
+
+    /// <summary>true면 아바타 오른쪽 아래에 접속 상태 점을 그린다.</summary>
     public bool ShowStatus { get; init; }
+
+    /// <summary>접속 중인지 (기본값 true). 상태 점 색을 정하며, ShowStatus가 true일 때만 쓰인다.</summary>
     public bool Online { get; init; } = true;
-    public Color? StatusColor { get; init; } // 값이 있으면 Online 대신 이 색으로 상태 점을 그린다 (자리 비움·회의 중 등)
+
+    /// <summary>값이 있으면 Online 대신 이 색으로 상태 점을 그린다 (자리 비움·회의 중 등). null이면 Online으로 정한다.</summary>
+    public Color? StatusColor { get; init; }
+
+    /// <summary>줄 오른쪽 끝에 보이는 글자 (안 읽은 수, 방 인원 "3/10" 등). null이거나 비어 있으면 그리지 않는다.</summary>
     public string? Badge { get; init; }
-    public bool BadgeAlert { get; init; } // true면 빨간 동그라미(안 읽은 수)
-    public bool Highlight { get; init; }  // 현재 참여 중인 방 등
+
+    /// <summary>true면 Badge를 빨간 알약 모양(안 읽은 수)으로, false면 회색 글자로 그린다.</summary>
+    public bool BadgeAlert { get; init; }
+
+    /// <summary>true면 이름을 굵은 파란 글씨로 강조한다 (현재 참여 중인 방 등).</summary>
+    public bool Highlight { get; init; }
+
+    /// <summary>줄에 붙여 두는 원래 데이터(UserInfo, RoomInfo 등). 화면에는 그려지지 않는다.</summary>
     // [개념] Tag: 화면과 상관없는 "원래 데이터"(UserInfo, RoomInfo)를 붙여 두는 자리.
     //        더블클릭했을 때 어떤 사용자/방인지 바로 꺼내 쓸 수 있다.
     public object? Tag { get; init; }
@@ -102,6 +128,7 @@ internal sealed class CardListView : UserControl
 
     // [개념] DesignerSerializationVisibility.Hidden: 비주얼 스튜디오 디자이너가 이 속성 값을 폼 코드(.Designer.cs)에
     //        저장하지 않게 한다. 디자이너 경고(WFO1000)를 막는 용도이며 실행 동작에는 영향이 없다.
+    /// <summary>목록에 보일 줄이 하나도 없을 때 가운데에 보여 줄 안내 문구.</summary>
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public string EmptyText { get; set; } = "";
 
@@ -109,11 +136,14 @@ internal sealed class CardListView : UserControl
     // [왜] 목록은 "무엇이 눌렸는지"만 알리고, 그다음 할 일(1:1 창 열기, 방 입장)은 MainForm이 정한다.
     //      화면 부품과 동작을 분리하면 같은 목록 컨트롤을 동료 목록·방 목록에 함께 쓸 수 있다.
     public event Action<CardItem>? ItemActivated;
+
+    /// <summary>머리줄이 아닌 줄을 눌러 선택한 줄이 바뀔 때 발생한다.</summary>
     public event Action? SelectionChanged;
 
     /// <summary>줄을 오른쪽 클릭함 (그 줄, 목록 안의 마우스 위치). 메뉴는 MainForm이 띄운다.</summary>
     public event Action<CardItem, Point>? ItemContextRequested;
 
+    /// <summary>선택된 줄 (선택한 줄이 없거나 접힌 부서 안에 숨어 있으면 null).</summary>
     // [읽는 법] Key로 현재 보이는 줄에서 찾는다. 선택한 줄이 접힌 부서 안에 있으면 _visible에 없어서 null이 된다(선택 Key 자체는 남음).
     public CardItem? SelectedItem => _visible.FirstOrDefault(i => !i.IsHeader && i.Key == _selectedKey);
 
@@ -124,6 +154,7 @@ internal sealed class CardListView : UserControl
     // [왜] S(...)는 LogicalToDeviceUnits를 짧게 쓰기 위한 도우미. 그리기 코드에 숫자가 많아 읽기 쉽게 줄였다.
     private int S(int v) => LogicalToDeviceUnits(v);
 
+    /// <summary>카드 목록 컨트롤을 만든다 (직접 그리기, 자동 스크롤, 키보드 포커스 받기 설정).</summary>
     public CardListView()
     {
         // [개념] 더블 버퍼링 등 그리기 방식 설정 (GradientPanel.cs 주석 참고).
@@ -197,6 +228,7 @@ internal sealed class CardListView : UserControl
     // [개념] OnXxx 메서드 재정의: 컨트롤이 받는 마우스·키보드 이벤트를 직접 처리한다.
     //        base.OnXxx(e)를 먼저 불러야 원래 동작(외부에서 연결한 이벤트 핸들러 호출 등)도 유지된다.
 
+    /// <summary>마우스가 올라간 줄을 기억해 강조하고, 줄 위에서는 손 모양 커서로 바꾼다.</summary>
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -208,6 +240,7 @@ internal sealed class CardListView : UserControl
         Invalidate();
     }
 
+    /// <summary>마우스가 목록 밖으로 나가면 강조 표시를 지운다.</summary>
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
@@ -216,6 +249,7 @@ internal sealed class CardListView : UserControl
         Invalidate();
     }
 
+    /// <summary>머리줄을 누르면 접기/펼치기, 일반 줄을 누르면 그 줄을 선택한다.</summary>
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
@@ -239,6 +273,7 @@ internal sealed class CardListView : UserControl
         SelectionChanged?.Invoke();
     }
 
+    /// <summary>일반 줄을 오른쪽 클릭하면 메뉴를 띄우도록 ItemContextRequested를 알린다.</summary>
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
@@ -248,6 +283,7 @@ internal sealed class CardListView : UserControl
         if (index >= 0 && !_visible[index].IsHeader) ItemContextRequested?.Invoke(_visible[index], e.Location);
     }
 
+    /// <summary>일반 줄을 더블클릭하면 ItemActivated(열기)를 알린다.</summary>
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
@@ -256,16 +292,19 @@ internal sealed class CardListView : UserControl
         if (index >= 0 && !_visible[index].IsHeader) ItemActivated?.Invoke(_visible[index]);
     }
 
+    /// <summary>Enter 키를 폼이 가로채지 않고 이 컨트롤이 직접 받도록 true를 돌려준다.</summary>
     // [개념] IsInputKey: 기본적으로 Enter·화살표 같은 키는 폼이 먼저 가로채(기본 버튼 누르기 등) 컨트롤까지 오지 않는다.
     //        true를 돌려주면 "이 키는 내가 직접 처리하겠다"는 뜻이 되어 OnKeyDown에서 Enter를 받을 수 있다.
     protected override bool IsInputKey(Keys keyData) => keyData == Keys.Enter || base.IsInputKey(keyData);
 
+    /// <summary>선택된 줄이 있을 때 Enter를 누르면 ItemActivated(열기)를 알린다.</summary>
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
         if (e.KeyCode == Keys.Enter && SelectedItem is CardItem item) ItemActivated?.Invoke(item);
     }
 
+    /// <summary>마우스 휠로 스크롤하면 보이는 줄이 바뀌므로 다시 그린다.</summary>
     // [왜] 스크롤하면 보이는 줄이 바뀌므로 다시 그린다 (보이는 줄만 그리는 방식이라 꼭 필요).
     protected override void OnMouseWheel(MouseEventArgs e)
     {
@@ -273,6 +312,7 @@ internal sealed class CardListView : UserControl
         Invalidate();
     }
 
+    /// <summary>스크롤 막대로 스크롤하면 보이는 줄이 바뀌므로 다시 그린다.</summary>
     protected override void OnScroll(ScrollEventArgs se)
     {
         base.OnScroll(se);

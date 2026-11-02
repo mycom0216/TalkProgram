@@ -63,6 +63,7 @@ namespace ChatApp.Server.Services;
 //   - 안 읽은 수·읽음 표시가 이상하다 ................ HandleReadMark, RoomService.MarkRead
 //   - 검색이 "잠시 후 다시" 라고 나온다 .............. HandleSearch의 2초 간격 제한(정상)
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>채팅·1:1 메시지 보내기와 수정·삭제, 공감, 읽음 표시, 입력 중 알림, 지난 대화·검색 요청을 처리하는 서비스.</summary>
 public sealed class MessageService(
     SessionManager sessions,
     RoomManager rooms,
@@ -73,14 +74,18 @@ public sealed class MessageService(
     AuditLog audit,
     ServerLogger log)
 {
+    /// <summary>메시지 하나의 최대 길이(글자 수). 넘으면 잘라서 저장·전송하며, DB 칸(VARCHAR(500))과 같아야 한다.</summary>
     public const int MaxMessageLength = 500;
 
     /// <summary>보낸 메시지를 지울 수 있는 시간. 관리자는 언제든(감사 로그에 남음).</summary>
     public static readonly TimeSpan DeleteWindow = TimeSpan.FromHours(24);
+
+    /// <summary>보낸 메시지를 수정할 수 있는 시간 (5분).</summary>
     public static readonly TimeSpan EditWindow = TimeSpan.FromMinutes(5);
 
     // ───────── 보내기 ─────────
 
+    /// <summary>방 채팅 메시지 처리: 참여 중인 방인지 확인하고 저장을 예약한 뒤 그 방 사람들에게 보낸다 (Target = 방 번호, 없으면 기본 방).</summary>
     public void HandleChat(ClientSession session, Packet packet)
     {
         string? body = packet.Body?.Trim();
@@ -115,6 +120,7 @@ public sealed class MessageService(
         rooms.SendToRoom(room, chat); // 같은 방 사람에게만
     }
 
+    /// <summary>1:1 메시지 처리 (Target = 받는 사람 사원번호): 저장하고 상대(접속 중이면)와 보낸 사람에게 보낸다. 상대가 오프라인이어도 보낼 수 있다.</summary>
     public void HandleWhisper(ClientSession session, Packet packet)
     {
         string? body = packet.Body?.Trim();
@@ -173,6 +179,7 @@ public sealed class MessageService(
 
     // ───────── 삭제 ─────────
 
+    /// <summary>메시지 수정 처리: 보낸 본인의 삭제되지 않은 메시지를 EditWindow 안에서만 고치고, 대화 참여자에게 수정을 알린다.</summary>
     public void HandleEdit(ClientSession session, Packet packet)
     {
         EditMessageRequest? request = packet.GetData<EditMessageRequest>();
@@ -207,6 +214,7 @@ public sealed class MessageService(
         });
     }
 
+    /// <summary>"입력 중" 알림 처리: 방이면 나를 뺀 방 사람들에게, 1:1이면 상대에게 전달한다 (입력 시작 알림은 세션당 1초에 한 번만).</summary>
     public void HandleTyping(ClientSession session, Packet packet)
     {
         if (packet.GetData<TypingRequest>() is not { } request) return;
@@ -232,6 +240,7 @@ public sealed class MessageService(
             .WithData(new TypingInfo { PeerNo = me.EmployeeNo, EmployeeNo = me.EmployeeNo, DisplayName = me.DisplayName, IsTyping = request.IsTyping }));
     }
 
+    /// <summary>메시지 삭제 처리: 본인 메시지는 DeleteWindow(24시간) 안에, 관리자는 언제든 지울 수 있다. 내용은 DB에 남기고 대화 참여자에게 삭제를 알린다.</summary>
     public void HandleDelete(ClientSession session, Packet packet)
     {
         MessageRef? req = packet.GetData<MessageRef>();
@@ -272,6 +281,7 @@ public sealed class MessageService(
 
     // ───────── 공감 ─────────
 
+    /// <summary>공감(이모지) 처리: 허용된 이모지를 눌렀으면 달고 이미 달았으면 취소한 뒤, 바뀐 공감 현황을 대화 참여자에게 보낸다.</summary>
     public void HandleReaction(ClientSession session, Packet packet)
     {
         ReactionRequest? req = packet.GetData<ReactionRequest>();
@@ -291,6 +301,7 @@ public sealed class MessageService(
 
     // ───────── 읽음 표시 ─────────
 
+    /// <summary>읽음 표시 처리: 방이면 읽은 위치를 방 멤버 정보에 반영하고, 1:1이면 DB에 저장하며 접속 중인 상대에게 알린다.</summary>
     public void HandleReadMark(ClientSession session, Packet packet)
     {
         ReadMark? mark = packet.GetData<ReadMark>();
@@ -354,6 +365,7 @@ public sealed class MessageService(
 
     // ───────── 검색 ─────────
 
+    /// <summary>메시지 검색 처리: 내가 볼 수 있는 방·1:1 대화에서 검색어(최소 길이~50자)를 찾아 결과를 보낸다 (세션당 2초에 한 번만).</summary>
     public void HandleSearch(ClientSession session, Packet packet)
     {
         string keyword = packet.GetData<SearchRequest>()?.Keyword.Trim() ?? "";

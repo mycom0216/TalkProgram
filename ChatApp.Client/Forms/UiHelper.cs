@@ -54,14 +54,28 @@ internal static class UiHelper
     // [개념] static readonly: 프로그램 전체에서 하나만 만들어 같이 쓰는 읽기 전용 값.
     //   Font는 윈도우 GDI 자원을 쓰므로 창마다 새로 만들기보다 한 번 만들어 공유하는 편이 가볍다.
     // [주의] 이 글꼴 3개는 프로그램 내내 쓰는 공유 객체다. 창이 닫힐 때 절대 Dispose하면 안 된다(다른 창이 같은 객체를 쓰고 있다). Dispose가 필요한 것은 창이 따로 만든 글꼴뿐이다.
+    /// <summary>대화상자(창)의 기본 글꼴: 맑은 고딕 10pt.</summary>
     public static readonly Font BaseFont = new("맑은 고딕", 10F);
+
+    /// <summary>굵은 글꼴: 맑은 고딕 10pt 굵게 (현재 쓰는 곳 없음).</summary>
     public static readonly Font BoldFont = new("맑은 고딕", 10F, FontStyle.Bold);
+
+    /// <summary>제목용 큰 글꼴: 맑은 고딕 15pt 굵게 (현재 쓰는 곳 없음).</summary>
     public static readonly Font TitleFont = new("맑은 고딕", 15F, FontStyle.Bold);
 
-    public static readonly Color Primary = Theme.Primary;                 // 하늘색 테마의 파랑
-    public static readonly Color Whisper = Color.FromArgb(124, 58, 237);  // 보라: 귓속말
-    public static readonly Color Muted = Color.FromArgb(107, 114, 128);   // 회색: 시스템 메시지
-    public static readonly Color Danger = Color.FromArgb(220, 38, 38);    // 빨강: 오류
+    /// <summary>강조 버튼 배경에 쓰는 하늘색 테마의 파랑 (Theme.Primary와 같은 값).</summary>
+    public static readonly Color Primary = Theme.Primary;
+
+    /// <summary>귓속말 표시용 보라색 (현재 쓰는 곳 없음).</summary>
+    public static readonly Color Whisper = Color.FromArgb(124, 58, 237);
+
+    /// <summary>안내 문구·상태 줄 같은 보조 글자에 쓰는 회색.</summary>
+    public static readonly Color Muted = Color.FromArgb(107, 114, 128);
+
+    /// <summary>오류·경고 글자에 쓰는 빨강.</summary>
+    public static readonly Color Danger = Color.FromArgb(220, 38, 38);
+
+    /// <summary>연한 하늘색 값. 이름은 머리(헤더) 배경용이지만 현재 쓰는 곳은 없다.</summary>
     public static readonly Color HeaderBack = Color.FromArgb(239, 244, 252);
 
     /// <summary>2열(라벨 | 입력칸) 입력 표. 내용 크기에 맞춰 자동으로 커진다.</summary>

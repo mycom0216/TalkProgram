@@ -17,30 +17,48 @@ namespace ChatApp.Common.Transfer;
 /// </summary>
 public sealed class FileTransferService
 {
+    /// <summary>올리기 한 건의 진행 상태(파일 ID, 원본 경로, 서버 허락 결과, 취소 토큰).</summary>
     private sealed class UploadJob(string fileId, string path)
     {
+        /// <summary>올리는 파일의 ID.</summary>
         public string FileId { get; } = fileId;
+        /// <summary>올릴 원본 파일 경로.</summary>
         public string Path { get; } = path;
-        public readonly TaskCompletionSource<string?> Accepted = new(TaskCreationOptions.RunContinuationsAsynchronously); // null = 허락, 문자열 = 거절 이유
-        public volatile string? FailReason; // 보내는 도중 서버가 실패를 알려 오면 채워진다
-        public volatile bool AllSent;       // 마지막 조각과 FileUploadEnd까지 보냄 (서버의 저장 결과만 남음)
-        public readonly CancellationTokenSource Cancel = new(); // 취소하면 큐 자리를 기다리던 SendBulk도 바로 깨어난다
+        /// <summary>서버의 허락 결과. null = 허락, 문자열 = 거절 이유.</summary>
+        public readonly TaskCompletionSource<string?> Accepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        /// <summary>보내는 도중 서버가 실패를 알려 오면 채워지는 이유. null이면 실패 없음.</summary>
+        public volatile string? FailReason;
+        /// <summary>마지막 조각과 FileUploadEnd까지 다 보냈는지(서버의 저장 결과만 남은 상태).</summary>
+        public volatile bool AllSent;
+        /// <summary>취소 토큰. 취소하면 큐 자리를 기다리던 SendBulk도 바로 깨어난다.</summary>
+        public readonly CancellationTokenSource Cancel = new();
     }
 
+    /// <summary>내려받기 한 건의 진행 상태(대기 여부, 임시 파일, 받은 바이트 등).</summary>
     private sealed class DownloadJob(string fileId, string destination)
     {
+        /// <summary>받을 파일의 ID.</summary>
         public string FileId { get; } = fileId;
+        /// <summary>최종 저장 경로.</summary>
         public string Destination { get; } = destination;
+        /// <summary>받는 동안 쓰는 임시 파일 경로(저장 경로 + ".part").</summary>
         public string TempPath { get; } = destination + ".part";
+        /// <summary>이번 내려받기 요청의 짧은 ID(8자). 서버가 이 요청의 패킷에 그대로 붙여 보내므로, 취소한 옛 요청의 늦은 조각을 걸러 내는 데 쓴다.</summary>
         // 요청마다 새로 만드는 짧은 ID. 서버가 이 요청의 패킷(시작·조각·끝)에 그대로 붙여 보낸다.
         // [왜] 받기를 취소하고 바로 같은 파일을 다시 받으면, 앞 요청의 조각이 늦게 도착할 수 있다.
         //      파일 ID만으로는 둘을 구분할 수 없어서 새 파일에 옛 조각이 섞여 파일이 깨진다 → 요청 ID로 걸러낸다.
         public string RequestId { get; set; } = Guid.NewGuid().ToString("N")[..8];
-        public bool Requested; // 서버에 요청을 보냈는지 (false = 차례를 기다리는 중)
-        public int RetryCount; // 서버가 "꽉 참"으로 거절해 다시 요청한 횟수
+        /// <summary>서버에 요청을 보냈는지 (false = 차례를 기다리는 중).</summary>
+        public bool Requested;
+        /// <summary>서버가 "꽉 참"으로 거절해 다시 요청한 횟수.</summary>
+        public int RetryCount;
+        /// <summary>받은 조각을 쓰는 임시 파일 스트림(받기 시작 전에는 null).</summary>
         public FileStream? Stream;
+        /// <summary>받을 파일 크기(바이트). 서버의 시작 응답으로 채워진다.</summary>
         public long Size;
+        /// <summary>지금까지 받은 바이트 수.</summary>
         public long Received;
+        /// <summary>마지막으로 알린 진행률(0~100). -1이면 아직 알린 적 없음.</summary>
         public int LastPercent = -1;
     }
 
@@ -69,9 +87,13 @@ public sealed class FileTransferService
     /// <summary>파일 1개 최대 크기. 서버 안내(ServerInfo)를 받으면 바꿔 준다.</summary>
     public long MaxFileSize { get; set; } = FileRules.DefaultMaxFileSize;
 
-    public event Action<string, int>? UploadProgress;      // (파일 ID, 0~100)
-    public event Action<string>? UploadSent;               // 다 보냄 → 곧 FileMsg가 온다
-    public event Action<string, string>? UploadFailed;     // (파일 ID, 이유)
+    /// <summary>올리기 진행률 (파일 ID, 0~100). 1%씩 바뀔 때만 발생한다.</summary>
+    public event Action<string, int>? UploadProgress;
+    /// <summary>파일을 다 보냄 (파일 ID). 곧 FileMsg가 온다.</summary>
+    public event Action<string>? UploadSent;
+    /// <summary>올리기 실패 (파일 ID, 이유).</summary>
+    public event Action<string, string>? UploadFailed;
+    /// <summary>내려받기 진행률 (파일 ID, 0~100). 1%씩 바뀔 때만 발생한다.</summary>
     public event Action<string, int>? DownloadProgress;
     /// <summary>대기열에서 차례가 와서 서버에 요청을 보냄 (파일 ID). 화면은 "대기 중" → "받는 중 0%"로 바꾼다.</summary>
     public event Action<string>? DownloadStarted;
@@ -81,9 +103,12 @@ public sealed class FileTransferService
     {
         lock (_downloadLock) return _downloads.TryGetValue(fileId, out DownloadJob? job) && !job.Requested;
     }
-    public event Action<string, string>? DownloadCompleted; // (파일 ID, 저장 경로)
+    /// <summary>내려받기 완료 (파일 ID, 저장 경로).</summary>
+    public event Action<string, string>? DownloadCompleted;
+    /// <summary>내려받기 실패 (파일 ID, 이유).</summary>
     public event Action<string, string>? DownloadFailed;
 
+    /// <summary>이 파일을 지금 내려받는 중이거나 대기열에서 기다리는 중인지.</summary>
     public bool IsDownloading(string fileId)
     {
         lock (_downloadLock) return _downloads.ContainsKey(fileId);

@@ -48,14 +48,24 @@ internal static class NativeMethods
     // [개념] StructLayout(LayoutKind.Sequential): 필드를 "적힌 순서 그대로" 메모리에 배치하라는 지시.
     //        C/C++로 만든 Windows API는 구조체의 메모리 모양이 정확히 같아야 읽을 수 있으므로,
     //        .NET이 마음대로 필드 순서를 바꾸지 못하게 고정한다. (윈도우 SDK의 FLASHWINFO 구조체와 같은 모양)
+    /// <summary>FlashWindowEx에 넘기는 창 깜빡임 설정 구조체 (Windows SDK의 FLASHWINFO와 같은 모양).</summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct FLASHWINFO
     {
-        public uint cbSize;    // 이 구조체의 크기(바이트). API가 버전 확인용으로 쓴다
-        public IntPtr hwnd;    // 깜빡일 창의 핸들(윈도우가 창마다 붙이는 번호)
-        public uint dwFlags;   // 무엇을 어떻게 깜빡일지 (아래 상수)
-        public uint uCount;    // 깜빡일 횟수
-        public uint dwTimeout; // 깜빡임 간격(ms). 0이면 커서 깜빡임 속도와 같게
+        /// <summary>이 구조체의 크기(바이트). API가 버전 확인용으로 쓴다.</summary>
+        public uint cbSize;
+
+        /// <summary>깜빡일 창의 핸들(윈도우가 창마다 붙이는 번호).</summary>
+        public IntPtr hwnd;
+
+        /// <summary>무엇을 어떻게 깜빡일지 정하는 플래그 (FLASHW_ 상수를 OR로 합친 값).</summary>
+        public uint dwFlags;
+
+        /// <summary>깜빡일 횟수.</summary>
+        public uint uCount;
+
+        /// <summary>깜빡임 간격(ms). 0이면 커서 깜빡임 속도와 같게.</summary>
+        public uint dwTimeout;
     }
 
     // [개념] P/Invoke(Platform Invoke): DllImport로 윈도우의 user32.dll 안에 있는 C 함수 FlashWindowEx를
@@ -90,11 +100,15 @@ internal static class NativeMethods
 
     // ───────── 자리 비움 자동 감지 ─────────
 
+    /// <summary>GetLastInputInfo에 넘기고 결과를 돌려받는 마지막 입력 시각 구조체 (Windows SDK의 LASTINPUTINFO와 같은 모양).</summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct LASTINPUTINFO
     {
+        /// <summary>이 구조체의 크기(바이트). 호출 전에 채워 넣는다.</summary>
         public uint cbSize;
-        public uint dwTime; // 마지막으로 키보드·마우스 입력이 있었던 시각 (부팅 후 밀리초)
+
+        /// <summary>마지막으로 키보드·마우스 입력이 있었던 시각 (부팅 후 밀리초).</summary>
+        public uint dwTime;
     }
 
     [DllImport("user32.dll")]

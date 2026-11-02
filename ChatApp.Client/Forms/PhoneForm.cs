@@ -59,6 +59,7 @@ internal sealed class PhoneForm : Form
     private readonly Button _clear = UiHelper.CreateButton("번호 지우기");
     private readonly Label _status = new() { AutoSize = true, ForeColor = UiHelper.Muted, Margin = new Padding(0, 8, 0, 0) };
 
+    /// <summary>내 휴대폰 번호 설정 창을 만든다. client로 번호 저장·삭제를 서버에 요청한다.</summary>
     public PhoneForm(ChatClient client)
     {
         _client = client;

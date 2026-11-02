@@ -48,12 +48,17 @@ namespace ChatApp.Server.Core;
 //   - 개발 중에는 제한이 안 걸린다 .............. 같은 PC(127.0.0.1)는 RateLimitLoopback=false일 때 제외되는 것이 정상
 //   - 서버 메모리가 천천히 는다 ................. Cleanup이 주기적으로 불리는지(PacketHandler.Maintenance → 하트비트 스레드 1분 주기)
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>키(보통 IP)별 시도 횟수를 토큰 버킷 방식으로 제한하는 클래스 (스레드 안전).</summary>
 // [읽는 법] 기본 생성자의 두 값이 곧 정책이다: capacity = 양동이 크기(한 번에 허용하는 연속 시도 수), refillPerMinute = 분당 다시 차는 토큰 수(평균 허용 속도). 인스턴스를 로그인용·가입용으로 따로 만들어 서로 다른 정책을 쓴다.
 public sealed class RateLimiter(int capacity, double refillPerMinute)
 {
+    /// <summary>키 하나의 토큰 양동이 상태.</summary>
     private sealed class Bucket
     {
+        /// <summary>지금 남은 토큰 수 (소수 가능, 1 이상이면 시도 허용).</summary>
         public double Tokens;
+
+        /// <summary>토큰을 마지막으로 계산한 시각 (Environment.TickCount64, 밀리초).</summary>
         public long LastTicks;
     }
 

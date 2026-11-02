@@ -346,6 +346,7 @@ static void PrintHelp()
         """);
 }
 
+/// <summary>서버 진입점 Program 클래스. 최상위 문(Main)과 서버 콘솔 관리자 명령 표(AdminCommands)를 한 클래스로 묶는다.</summary>
 // [개념] 최상위 문(top-level statements): 이 파일처럼 class 없이 바로 쓴 코드는 컴파일러가 Program 클래스의 Main으로 감싼다.
 //        partial class Program을 쓰면 그 자동 생성 클래스에 필드를 덧붙일 수 있다(명령어 표를 매번 새로 만들지 않으려고 static 필드로).
 // [개념] 최상위 문을 쓰면 컴파일러가 숨은 Program 클래스를 만든다. partial로 같은 이름의 클래스를 선언해 필드(명령어 표)를 덧붙인 것이다. static readonly라 한 번만 만들어 계속 쓴다.

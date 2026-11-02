@@ -56,6 +56,7 @@ public sealed class ServerLogger : IDisposable
     private readonly StreamWriter _file;
     private readonly Thread _thread;
 
+    /// <summary>로그 파일(filePath, 없으면 폴더째 만들고 이어 쓰기)을 열고 로그 기록 스레드를 시작한다.</summary>
     public ServerLogger(string filePath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
@@ -69,7 +70,10 @@ public sealed class ServerLogger : IDisposable
         _thread.Start();
     }
 
+    /// <summary>INFO 로그를 큐에 넣고 바로 돌아온다 (어느 스레드에서나 안전, 실제 출력은 로그 스레드가 한다).</summary>
     public void Info(string message) => Write("INFO", message);
+
+    /// <summary>ERROR 로그를 큐에 넣고 바로 돌아온다 (어느 스레드에서나 안전, 실제 출력은 로그 스레드가 한다).</summary>
     public void Error(string message) => Write("ERROR", message);
 
     private void Write(string level, string message)
@@ -97,6 +101,7 @@ public sealed class ServerLogger : IDisposable
         }
     }
 
+    /// <summary>큐에 남은 로그를 마저 쓰게 한 뒤(최대 2초 대기) 파일과 큐를 닫는다.</summary>
     public void Dispose()
     {
         _queue.CompleteAdding();       // 남은 로그를 다 쓰고 Run 루프가 끝나게 한다

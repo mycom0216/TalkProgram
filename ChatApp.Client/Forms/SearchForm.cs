@@ -52,6 +52,7 @@ namespace ChatApp.Client.Forms;
 //   - 검색어는 서버에서 부분 일치로 찾는다고 알려져 있지만(헤더 설명 기준), 대량 데이터에서의 속도는 서버 쿼리/색인에 달려 있다(이 파일의 책임이 아님).
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>전체 대화 검색 창. 검색어를 서버에 보내 결과를 목록으로 보여 준다.</summary>
 public sealed class SearchForm : Form
 {
     private readonly ChatClient _client;
@@ -74,6 +75,7 @@ public sealed class SearchForm : Form
     // [개념] SearchHit에는 방 번호 또는 상대 사원번호가 들어 있다. 메인 창이 이것으로 알맞은 대화창을 연다(OpenSearchHit).
     public event Action<SearchHit>? HitActivated;
 
+    /// <summary>검색 창을 만든다. client로 검색 요청을 서버에 보낸다.</summary>
     public SearchForm(ChatClient client)
     {
         _client = client;

@@ -76,6 +76,7 @@ internal sealed class AddFriendForm : Form
     // [읽는 법] MainForm.Network의 "case PacketType.Error when _addFriendForm is { IsWaiting: true }"가 이 값을 본다. 기다리는 중의 오류는 이 창이 보여 주고, 아니면 일반 대화창에 오류 줄로 들어간다.
     public bool IsWaiting => _waitingSearch || _waitingAdd;
 
+    /// <summary>친구 추가 창을 만든다. client로 사용자 검색과 친구 추가를 서버에 요청한다.</summary>
     public AddFriendForm(ChatClient client)
     {
         _client = client;

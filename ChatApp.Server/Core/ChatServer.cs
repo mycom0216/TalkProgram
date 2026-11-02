@@ -109,6 +109,7 @@ public sealed class ChatServer
     /// <summary>채팅방 목록 (스레드 안전). 서버 콘솔의 /rooms 명령에서도 쓴다.</summary>
     public RoomManager Rooms { get; } = new();
 
+    /// <summary>서버를 만든다. 서비스·저장소를 조립하고 DB의 채팅방을 불러오며, 접속 대기는 <see cref="Start"/>에서 시작한다.</summary>
     // [왜] 필요한 객체(AuthService, 각종 Repository, 설정, 로거)를 생성자에서 "받아서" 쓴다(의존성 주입).
     //      ChatServer가 직접 DB 연결 문자열을 알 필요가 없고, 테스트 때 다른 객체로 바꿔 끼우기도 쉽다.
     public ChatServer(IPAddress address, int port, AuthService auth, RoomRepository roomRepository,

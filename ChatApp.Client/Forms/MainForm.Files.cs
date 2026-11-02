@@ -71,6 +71,7 @@ namespace ChatApp.Client.Forms;
 //   - 이미지 뷰어 이동이 안 된다 ............. _imageViewerItems(대화의 사진 목록), LoadImageViewerItem의 다운로드 시작 조건
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메인 창(partial) - 파일·사진·동영상 보내기/받기/취소, 이미지 뷰어, 방 파일 모아보기 부분.</summary>
 public sealed partial class MainForm
 {
     // ───────────────────────── 파일·이미지·동영상 ─────────────────────────

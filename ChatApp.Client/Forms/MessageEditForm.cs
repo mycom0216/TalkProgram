@@ -27,9 +27,10 @@ namespace ChatApp.Client.Forms;
 internal sealed class MessageEditForm : Form
 {
     private readonly TextBox _text = new() { Multiline = true, AcceptsReturn = true, MaxLength = 500, ScrollBars = ScrollBars.Vertical };
-    // [읽는 법] 출력값. 저장(OK)으로 닫혔을 때만 읽는다. 앞뒤 공백은 제거된다.
+    /// <summary>고친 메시지 내용 (앞뒤 공백 제거). 저장(OK)으로 닫혔을 때만 읽는다.</summary>
     public string EditedText => _text.Text.Trim();
 
+    /// <summary>메시지 수정 창을 만든다. original은 입력칸에 처음 채울 원래 메시지 내용.</summary>
     public MessageEditForm(string original)
     {
         Text = "메시지 수정";

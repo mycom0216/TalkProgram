@@ -63,9 +63,15 @@ public sealed class ClientSettings
 {
     // [개념] 속성 초기값(= "127.0.0.1" 등): 파일이 없거나 해당 항목이 빠져 있을 때 쓰이는 기본값.
     //        JSON을 읽을 때 파일에 없는 항목은 이 기본값이 그대로 남는다(예전 버전 설정 파일도 문제없이 읽힘).
+    /// <summary>마지막으로 접속한 서버 주소 (기본값 127.0.0.1).</summary>
     public string Host { get; set; } = "127.0.0.1";
+
+    /// <summary>마지막으로 접속한 서버 포트 (기본값 9000).</summary>
     public int Port { get; set; } = 9000;
+
+    /// <summary>마지막으로 로그인한 사원번호 (없으면 빈 문자열).</summary>
     public string LastEmployeeNo { get; set; } = "";
+
     /// <summary>설치별 자동 로그인 토큰을 서버에서 분리 관리하는 무작위 기기 ID.</summary>
     public string DeviceId { get; set; } = Guid.NewGuid().ToString("N");
 
@@ -77,15 +83,20 @@ public sealed class ClientSettings
 
     /// <summary>알림을 끈 채팅방 번호. 설정은 이 PC의 client.json에 저장한다.</summary>
     public List<int> MutedRoomIds { get; set; } = [];
+
+    /// <summary>자동 로그인 토큰을 Windows 사용자별로 암호화(DPAPI)해 Base64로 저장한 목록. 키 = "서버주소:포트:사원번호".</summary>
     public Dictionary<string, string> ProtectedLoginTokens { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     private static string LoginTokenKey(string host, int port, string employeeNo) => $"{host.Trim()}:{port}:{employeeNo.Trim()}";
+
+    /// <summary>저장된 자동 로그인 토큰을 복호화해 돌려준다. 없거나 복호화에 실패하면(깨진 항목은 지우고) null.</summary>
     public string? GetLoginToken(string host, int port, string employeeNo)
     {
         if (!ProtectedLoginTokens.TryGetValue(LoginTokenKey(host, port, employeeNo), out string? encrypted)) return null;
         try { return Encoding.UTF8.GetString(ProtectedData.Unprotect(Convert.FromBase64String(encrypted), Encoding.UTF8.GetBytes("ChatApp.LoginToken.v1"), DataProtectionScope.CurrentUser)); }
         catch (Exception ex) when (ex is CryptographicException or FormatException) { ProtectedLoginTokens.Remove(LoginTokenKey(host, port, employeeNo)); return null; }
     }
+    /// <summary>자동 로그인 토큰을 암호화해 저장한다. token이 null이거나 비어 있으면 저장된 토큰을 지운다.</summary>
     public void SetLoginToken(string host, int port, string employeeNo, string? token)
     {
         string key = LoginTokenKey(host, port, employeeNo);
@@ -107,6 +118,7 @@ public sealed class ClientSettings
     public string? GetTrustedFingerprint(string host, int port) =>
         TrustedServers.TryGetValue(ServerKey(host, port), out string? fp) ? fp : null;
 
+    /// <summary>이 서버의 인증서 지문을 "신뢰함"으로 저장한다 (이미 있으면 덮어쓴다).</summary>
     public void SetTrustedFingerprint(string host, int port, string fingerprint) =>
         TrustedServers[ServerKey(host, port)] = fingerprint;
 

@@ -58,11 +58,17 @@ public sealed class CreateRoomForm : Form
 
     // [개념] => 로 만든 읽기 전용 속성: 읽을 때마다 현재 입력값을 계산해서 돌려준다.
     // [읽는 법] 아래 세 속성이 이 창의 "출력값"이다. 창이 닫힌 뒤에도(Dispose 전까지) 읽을 수 있어서, 부르는 쪽이 using var form 블록 안에서 OK일 때 읽는다.
+    /// <summary>입력한 방 이름 (앞뒤 공백 제거).</summary>
     public string RoomName => _name.Text.Trim();
+
+    /// <summary>입력한 최대 인원(명).</summary>
     // NumericUpDown.Value는 decimal 형식이라 int로 바꿔서 돌려준다.
     public int MaxUsers => (int)_maxUsers.Value;
+
+    /// <summary>비공개 방으로 만들지 여부 (true면 방 목록에 안 보이고 초대한 사람만 참여).</summary>
     public bool IsPrivate => _private.Checked;
 
+    /// <summary>새 채팅방 만들기 창을 만든다.</summary>
     public CreateRoomForm()
     {
         Text = "새 채팅방";

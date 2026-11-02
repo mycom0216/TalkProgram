@@ -85,6 +85,7 @@ public sealed class FileRepository(Db db)
         }
     }
 
+    /// <summary>files 표에 올리기 시작한 파일을 UPLOADING 상태로 한 줄 넣는다.</summary>
     public void InsertUploading(FileRecord f)
     {
         using DbConnection conn = db.Open();
@@ -105,6 +106,7 @@ public sealed class FileRepository(Db db)
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>파일을 DONE(올리기 완료)으로 바꾸고 created_at을 지금(UTC)으로 갱신한다.</summary>
     public void MarkDone(string fileId)
     {
         using DbConnection conn = db.Open();
@@ -120,6 +122,7 @@ public sealed class FileRepository(Db db)
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>files 표에서 해당 파일 기록을 지운다 (디스크 파일은 지우지 않는다).</summary>
     public void Delete(string fileId)
     {
         using DbConnection conn = db.Open();
@@ -129,6 +132,7 @@ public sealed class FileRepository(Db db)
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>파일 번호로 파일 기록을 찾는다. 없으면 null (Done은 상태가 DONE일 때 true).</summary>
     public FileRecord? Find(string fileId)
     {
         using DbConnection conn = db.Open();

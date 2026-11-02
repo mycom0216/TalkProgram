@@ -28,10 +28,11 @@ public static class PacketSerializer
     /// <summary>길이 헤더 크기(int32 = 4바이트).</summary>
     public const int HeaderSize = 4;
 
+    /// <summary>패킷 본문(JSON)의 최대 크기(1MB). 넘는 패킷은 보내지 않고, 받으면 연결을 끊는다.</summary>
     // [주의] 상대가 길이 칸에 20억 같은 엉터리 값을 보내면 그만큼 메모리를 잡으려다 서버가 죽을 수 있다.
     //   그래서 최대 크기를 정해 두고 넘으면 연결을 끊는다(방어적 프로그래밍).
     //   파일은 256KB 조각으로 나눠 보내므로(Base64로 약 350KB) 1MB면 충분하다.
-    public const int MaxBodySize = 1024 * 1024; // 1MB. 비정상 길이로 메모리를 잡아먹는 것을 막는다.
+    public const int MaxBodySize = 1024 * 1024;
 
     // [왜] JsonSerializerOptions는 만들 때 비용이 크고 내부에 캐시를 갖고 있어서, 매번 new 하지 않고
     //   static readonly로 하나만 만들어 재사용하는 것이 권장 방식이다(스레드 안전하게 공유 가능).
@@ -104,6 +105,7 @@ public static class PacketSerializer
 // [개념] JsonConverter&lt;T&gt;: System.Text.Json에 "이 타입은 이렇게 읽고 써라"를 직접 알려 주는 클래스.
 public sealed class PacketTypeConverter : JsonConverter<PacketType>
 {
+    /// <summary>JSON에서 PacketType을 읽는다. 숫자나 이름 문자열을 받고, 모르는 값이면 PacketType.Unknown.</summary>
     public override PacketType Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         // 숫자로 온 경우(아주 옛 형식)도 받아 준다
@@ -115,6 +117,7 @@ public sealed class PacketTypeConverter : JsonConverter<PacketType>
             : PacketType.Unknown;
     }
 
+    /// <summary>PacketType을 이름 문자열(예: "ChatMsg")로 쓴다.</summary>
     public override void Write(Utf8JsonWriter writer, PacketType value, JsonSerializerOptions options)
         => writer.WriteStringValue(value.ToString());
 }

@@ -60,6 +60,7 @@ namespace ChatApp.Client.Forms;
 //   - 임시 비밀번호는 메시지 상자에도 그대로 보인다(어깨너머 노출 가능). 화면 공유 중에는 주의.
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>관리자 창. 회원 관리, 감사 로그, 통계 세 탭으로 구성된다.</summary>
 public sealed class AdminForm : Form
 {
     private readonly ChatClient _client;
@@ -96,6 +97,7 @@ public sealed class AdminForm : Form
     private static readonly (string Text, string? Value)[] Filters =
         [("전체", null), ("승인 대기", "PENDING"), ("사용 중", "ACTIVE"), ("정지", "SUSPENDED"), ("퇴사", "RESIGNED")];
 
+    /// <summary>관리자 창을 만든다. myEmployeeNo는 내 계정에 대한 위험한 버튼을 꺼 두는 데 쓴다.</summary>
     public AdminForm(ChatClient client, string myEmployeeNo)
     {
         _client = client;
@@ -574,8 +576,6 @@ public sealed class AdminForm : Form
         ShowStatus($"감사 로그 {entries.Count}건 ({DateTime.Now:HH:mm:ss})", error: false);
     }
 
-    /// <summary>임시 비밀번호를 보여 주고 클립보드에 복사한다.</summary>
-    // [왜] 임시 비밀번호는 서버 로그·감사 로그 어디에도 남기지 않는다. 지금 이 화면이 유일하게 보이는 곳이다.
     /// <summary>
     /// 60초 뒤 클립보드에 아직 그 임시 비밀번호가 있으면 지운다.
     /// [왜] 클립보드는 모든 프로그램이 읽을 수 있고, 클립보드 기록(Win+V)에도 남는다. 다른 것을 복사했으면 건드리지 않는다.
@@ -597,6 +597,8 @@ public sealed class AdminForm : Form
         timer.Start(); // [주의] 창을 닫아도 타이머는 UI 스레드에서 계속 돈다(그래서 static으로, 창에 묶지 않는다)
     }
 
+    /// <summary>임시 비밀번호를 보여 주고 클립보드에 복사한다.</summary>
+    // [왜] 임시 비밀번호는 서버 로그·감사 로그 어디에도 남기지 않는다. 지금 이 화면이 유일하게 보이는 곳이다.
     private void ShowTempPassword(string employeeNo, string temp)
     {
         try { Clipboard.SetText(temp); } catch (System.Runtime.InteropServices.ExternalException) { /* 다른 프로그램이 클립보드를 쓰는 중 */ }

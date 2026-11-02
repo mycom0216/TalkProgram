@@ -32,8 +32,10 @@ namespace ChatApp.Client.Forms;
 internal sealed class RoomCapacityForm : Form
 {
     private readonly NumericUpDown _value = new() { Width = 100, TextAlign = HorizontalAlignment.Right, Name = "RoomCapacity" };
+    /// <summary>입력한 새 최대 인원(명). 저장(OK)으로 닫혔을 때 읽는다.</summary>
     public int Capacity => (int)_value.Value;
 
+    /// <summary>정원 변경 창을 만든다. current는 현재 정원, memberCount는 지금 멤버 수(이보다 작게는 못 줄임).</summary>
     public RoomCapacityForm(string roomName, int current, int memberCount)
     {
         Text = "방 정원 바꾸기";

@@ -64,6 +64,7 @@ namespace ChatApp.Client.Forms;
 //   - 핸들이 계속 늘어난다 ..................... StatusDotImage/아이콘/메뉴 Dispose(MainForm.Dispose)
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메인 창(partial) - 내 상태·상태 메시지, 자동 자리 비움, 트레이 아이콘, 알림 창 부분.</summary>
 public sealed partial class MainForm
 {
     // ───────────────────────── 상태 표시·자리 비움 ─────────────────────────

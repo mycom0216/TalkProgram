@@ -56,6 +56,7 @@ namespace ChatApp.Server.Services;
 //   - 번호 등록이 "이미 등록된 번호" ............ users 테이블의 번호 UNIQUE 제약(SetPhone이 false)
 //   - 친구 목록의 상태가 늦다 ................... 접속자 목록 방송 주기, SendList의 세션 덧씌우기
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>친구 목록, 친구 찾기·추가·삭제, 프로필 카드, 휴대폰 번호 등록을 처리하는 서비스 (상태를 갖지 않는다).</summary>
 // [읽는 법] 기본 생성자로 받은 세 부품을 그대로 쓴다: sessions = 지금 접속 중인 사람 찾기, users = DB, log = 로그. 이 서비스 자체는 상태를 갖지 않는다(필드가 없다) — 그래서 lock이 필요 없다.
 public sealed class FriendService(SessionManager sessions, UserRepository users, ServerLogger log)
 {
@@ -70,6 +71,7 @@ public sealed class FriendService(SessionManager sessions, UserRepository users,
         session.Send(Packet.Create(PacketType.FriendList, notice).WithData(friends));
     }
 
+    /// <summary>친구 찾기 요청 처리: 아이디나 휴대폰 번호로 사용 중인 계정을 찾아 결과를 보낸다 (세션당 1초에 한 번만 허용).</summary>
     public void HandleSearch(ClientSession session, Packet packet)
     {
         UserInfo me = session.User!;
@@ -119,6 +121,7 @@ public sealed class FriendService(SessionManager sessions, UserRepository users,
         session.Send(Packet.Create(PacketType.FriendSearchRes).WithData(result));
     }
 
+    /// <summary>친구 추가 요청 처리 (Body = 대상 사원번호): 사용 중인 계정·본인 아님·친구 수 한도를 확인하고 추가한 뒤 목록을 다시 보낸다.</summary>
     public void HandleAdd(ClientSession session, Packet packet)
     {
         UserInfo me = session.User!;
@@ -145,6 +148,7 @@ public sealed class FriendService(SessionManager sessions, UserRepository users,
         SendList(session, added ? $"{target.DisplayName}님을 친구로 추가했습니다." : $"{target.DisplayName}님은 이미 친구입니다.");
     }
 
+    /// <summary>친구 삭제 요청 처리 (Body = 대상 사원번호): 친구 등록을 지우고 갱신된 목록을 다시 보낸다.</summary>
     public void HandleRemove(ClientSession session, Packet packet)
     {
         UserInfo me = session.User!;

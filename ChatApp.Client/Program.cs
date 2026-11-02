@@ -41,6 +41,7 @@ namespace ChatApp.Client;
 //   - ThreadException에서 오류를 사용자에게만 보여 주고 파일 로그로 남기지는 않는다. 현장 문제 추적을 하려면 로그 파일 기록을 붙이면 좋다.
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>프로그램 시작점. 로그인 창을 띄우고 성공하면 메인 창을 연다.</summary>
 internal static class Program
 {
     /// <summary>

@@ -51,6 +51,7 @@ namespace ChatApp.Server.Data;
 //   - 방 이름 옆 방장 표시가 번호로 보인다 ...... users 조인 실패(탈퇴·삭제된 계정) → COALESCE가 사원번호로 대체한 것
 //   - 읽음 숫자가 되돌아간다 ................... UpdateRead의 GREATEST, 메모리 MarkRead와 같은 규칙인지
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>rooms·room_members·room_notices 표에 채팅방과 멤버, 공지를 저장하고 읽는 저장소.</summary>
 public sealed class RoomRepository(Db db)
 {
     /// <summary>기본 방("전체 채팅", 1번)이 없으면 만든다. 서버 시작 시 1번 호출.</summary>
@@ -166,6 +167,7 @@ public sealed class RoomRepository(Db db)
         tx.Commit();
     }
 
+    /// <summary>room_members 표에서 그 방의 멤버 한 명을 지운다.</summary>
     public void RemoveMember(int roomId, string employeeNo)
     {
         using DbConnection conn = db.Open();
@@ -198,6 +200,7 @@ public sealed class RoomRepository(Db db)
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>방의 최대 인원(max_users)을 저장한다 (0 = 제한 없음).</summary>
     public void SetMaxUsers(int roomId, int maxUsers)
     {
         using DbConnection conn = db.Open();
@@ -208,6 +211,7 @@ public sealed class RoomRepository(Db db)
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>방 공지를 저장한다. text가 빈 문자열이면 공지를 삭제하고, 아니면 등록·수정하며 바꾼 사람(actorNo)을 기록한다.</summary>
     public void SetPinnedNotice(int roomId, string text, string actorNo)
     {
         using DbConnection conn = db.Open();

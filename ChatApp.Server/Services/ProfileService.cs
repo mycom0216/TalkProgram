@@ -56,6 +56,7 @@ namespace ChatApp.Server.Services;
 //   - 사진을 바꿨는데 다른 사람 화면은 그대로 .. broadcastUserList 호출 여부, 접속자 목록의 PhotoVersion 값, 클라이언트 캐시
 //   - "서버에 사진을 저장하지 못했습니다" ....... uploads\profiles 폴더 쓰기 권한·디스크 공간, 로그의 IOException 메시지
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>프로필 사진·배경 사진을 서버 디스크(업로드 폴더\profiles)에 저장하고 보내 주는 서비스.</summary>
 // [읽는 법] 마지막 Action broadcastUserList는 "접속자 목록을 모두에게 다시 보내라"는 신호 함수다. 사진 버전이 바뀌면 이 목록으로 다른 사람들에게 변경을 알린다.
 public sealed class ProfileService(UserRepository users, string uploadRoot, ServerLogger log, Action broadcastUserList)
 {
@@ -152,6 +153,7 @@ public sealed class ProfileService(UserRepository users, string uploadRoot, Serv
         => session.Send(Packet.Create(PacketType.ProfilePhoto, message, success: false).WithData(new PhotoInfo { Kind = kind }));
 }
 
+/// <summary>프로필 사진 응답 패킷을 만드는 Packet 확장 메서드 모음.</summary>
 internal static class ProfilePacketExtensions
 {
     /// <summary>ProfilePhoto 패킷에 종류·버전(Data = PhotoInfo)과 사진 바이트(Bin)를 담는다.</summary>

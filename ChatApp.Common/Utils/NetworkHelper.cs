@@ -22,11 +22,12 @@ public static class NetworkHelper
     /// <summary>
     /// 패킷 1개를 읽을 때까지 블로킹한다. 상대가 연결을 정상 종료하면 null을 반환한다.
     /// </summary>
-    // [개념] Stream: 바이트를 순서대로 읽고 쓰는 통로의 공통 부모 클래스. NetworkStream, FileStream 등이 모두 Stream이다.
-    //   매개변수를 Stream으로 받아 두면 나중에 SslStream(TLS 암호화)으로 감싸도 이 코드를 그대로 쓸 수 있다.
+    /// <param name="stream">패킷을 읽어 올 스트림 (NetworkStream 또는 TLS를 씌운 SslStream).</param>
     /// <param name="checkTlsHello">
     /// true면 "TLS 인사말(ClientHello)이 왔는지" 확인한다. 평문 서버가 연결의 첫 패킷을 읽을 때만 쓴다.
     /// </param>
+    // [개념] Stream: 바이트를 순서대로 읽고 쓰는 통로의 공통 부모 클래스. NetworkStream, FileStream 등이 모두 Stream이다.
+    //   매개변수를 Stream으로 받아 두면 나중에 SslStream(TLS 암호화)으로 감싸도 이 코드를 그대로 쓸 수 있다.
     public static Packet? ReadPacket(Stream stream, bool checkTlsHello = false)
     {
         // ① 헤더(4바이트) 읽기 → 이번 패킷 본문이 몇 바이트인지 알아낸다

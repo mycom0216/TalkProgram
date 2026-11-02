@@ -66,6 +66,7 @@ namespace ChatApp.Server.Services;
 // [읽는 법] record = 값 묶음용 불변 클래스. 동작 결과를 (성공 여부, 안내 문구, 임시 비밀번호)로 돌려준다. TempPassword는 비밀번호 초기화 때만 값이 있고 나머지는 기본값 null이다. 실패는 예외가 아니라 Success=false로 알려 준다(예상 가능한 거절).
 public sealed record AdminOutcome(bool Success, string Message, string? TempPassword = null);
 
+/// <summary>관리자 기능(회원 승인·정지·권한 변경, 접속자 조회, 감사 로그 검색, 통계)을 모은 서비스. 클라이언트 관리자 창과 서버 콘솔이 같이 쓴다.</summary>
 // [읽는 법] 기본 생성자로 받는 부품: users(DB), auditRepository(감사 로그 조회), auth(비밀번호 초기화 규칙), sessions(접속 중인 사람 찾기·끊기), audit(감사 기록), log, db와 uploadRoot(통계용, 없어도 만들 수 있게 기본값 null).
 public sealed class AdminService(UserRepository users, AuditRepository auditRepository, AuthService auth,
                                  SessionManager sessions, AuditLog audit, ServerLogger log, Db? db = null,
@@ -92,6 +93,7 @@ public sealed class AdminService(UserRepository users, AuditRepository auditRepo
     /// <summary>감사 로그 검색 (최근 것부터).</summary>
     public List<AuditEntry> QueryAudit(AuditQuery query) => auditRepository.Query(query);
 
+    /// <summary>회원·방·메시지·파일 수와 최근 7일 시간대별 통계를 DB에서 모아 돌려준다. DB가 연결되지 않았으면 InvalidOperationException.</summary>
     public AdminStats GetStats()
     {
         if (db is null) throw new InvalidOperationException("관리 통계용 DB가 연결되지 않았습니다.");

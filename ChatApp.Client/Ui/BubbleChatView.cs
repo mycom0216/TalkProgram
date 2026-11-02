@@ -55,6 +55,7 @@ namespace ChatApp.Client.Ui;
 //   - 삭제·공감 후 화면이 안 바뀐다 ............ Conversation.NotifyChanged → ChatWindow.OnItemChanged → RefreshItem
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>대화 한 줄의 종류: 내 말, 상대 말, 시스템 알림, 공지, 오류.</summary>
 internal enum ChatItemKind { Mine, Other, System, Notice, Error }
 
 /// <summary>파일 말풍선에서 고른 동작.</summary>
@@ -113,13 +114,25 @@ internal sealed class ChatItem
     public bool Mentioned { get; init; }
 
     // ── 배치 결과 (BubbleChatView 전용) ──
+    /// <summary>이 줄의 위쪽 y 좌표 (스크롤 내용 기준, 앞 줄과의 간격 뒤).</summary>
     internal int Y;
-    internal int Height;
-    internal bool ShowHeader;
-    internal Rectangle Bubble, TextRect, AvatarRect, NameRect, TimeRect, QuoteRect;
-    internal readonly List<(Rectangle Rect, string Emoji)> ReactionChips = [];
-    internal Rectangle ThreadChip; // "↳ 댓글 N" 칩 (없으면 Empty)
 
+    /// <summary>이 줄이 차지하는 높이(px). 말풍선과 그 아래 공감·댓글 칩 줄을 합친 값이다.</summary>
+    internal int Height;
+
+    /// <summary>상대 말풍선 위에 아바타와 이름을 그릴지 (같은 사람의 연속 메시지는 첫 줄만 true).</summary>
+    internal bool ShowHeader;
+
+    /// <summary>말풍선, 글, 아바타, 이름, 시각, 답장 인용 영역의 사각형 (스크롤 내용 기준 좌표, 없으면 Rectangle.Empty).</summary>
+    internal Rectangle Bubble, TextRect, AvatarRect, NameRect, TimeRect, QuoteRect;
+
+    /// <summary>말풍선 아래 공감 칩들의 (사각형, 이모지) 목록. 클릭 판정과 그리기에 쓴다.</summary>
+    internal readonly List<(Rectangle Rect, string Emoji)> ReactionChips = [];
+
+    /// <summary>"↳ 댓글 N" 칩의 사각형 (없으면 Empty).</summary>
+    internal Rectangle ThreadChip;
+
+    /// <summary>입장·퇴장 알림, 공지, 오류처럼 사람이 쓴 글이 아닌 가운데 알림 줄인지 (System, Notice, Error).</summary>
     public bool IsSystemLike => Kind is ChatItemKind.System or ChatItemKind.Notice or ChatItemKind.Error;
 }
 
@@ -162,6 +175,8 @@ internal sealed class BubbleChatView : UserControl
 
     /// <summary>메시지 메뉴 → 삭제.</summary>
     public event Action<ChatItem>? DeleteRequested;
+
+    /// <summary>메시지 메뉴 → 수정.</summary>
     public event Action<ChatItem>? EditRequested;
 
     /// <summary>내 사원번호. 내가 누른 공감 칩을 진하게 그리는 데 쓴다.</summary>
@@ -171,15 +186,19 @@ internal sealed class BubbleChatView : UserControl
     /// <summary>이 메시지를 지울 수 있는지 (내 메시지 24시간 이내, 관리자는 모두). 없으면 삭제 메뉴를 숨긴다.</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public Func<ChatItem, bool>? CanDelete { get; set; }
+
+    /// <summary>이 메시지를 고칠 수 있는지 (내 메시지, 보낸 지 5분 이내). 없으면 수정 메뉴를 숨긴다.</summary>
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public Func<ChatItem, bool>? CanEdit { get; set; }
     private int _layoutWidth = -1;
     private bool _topNotified;
 
+    /// <summary>스크롤이 맨 위에 닿았을 때 한 번 발생한다 (이전 대화를 불러오라는 신호).</summary>
     public event Action? ReachedTop;
 
     private int S(int v) => LogicalToDeviceUnits(v);
 
+    /// <summary>말풍선 대화 화면을 만들고 직접 그리기 설정과 오른쪽 클릭 메뉴를 준비한다.</summary>
     public BubbleChatView()
     {
         // [읽는 법] 직접 그리는 컨트롤의 기본 설정 네 가지: 더블 버퍼(화면 밖 그림판에 그린 뒤 한 번에 보여 깜빡임 방지) / AllPaintingInWmPaint(배경 지우기를 따로 하지 않음) / UserPaint(내가 그린다) / ResizeRedraw(크기가 바뀌면 다시 그림).
@@ -213,6 +232,7 @@ internal sealed class BubbleChatView : UserControl
         _messageMenu.Items.Add("대화 내용 복사", null, (_, _) => CopyAll());
     }
 
+    /// <summary>컨트롤 트리 밖에 있는 오른쪽 클릭 메뉴 3개를 직접 해제한다.</summary>
     // [주의] ContextMenuStrip은 컨트롤 트리에 들어 있지 않아 창이 닫혀도 자동으로 해제되지 않는다(메뉴 창 핸들이 남음).
     protected override void Dispose(bool disposing)
     {
@@ -257,6 +277,7 @@ internal sealed class BubbleChatView : UserControl
     /// <summary>읽음 숫자처럼 크기와 상관없는 표시만 바뀌었을 때 (전체 다시 그리기).</summary>
     public void RefreshAll() => Invalidate();
 
+    /// <summary>화면의 말풍선 목록을 통째로 바꾸고 다시 배치한다. preserveViewport가 true면 보던 위치를 유지하고, 아니면 맨 아래로 간다.</summary>
     public void SetItems(IEnumerable<ChatItem> items, bool preserveViewport = false)
     {
         ChatItem? anchor = null;
@@ -290,6 +311,7 @@ internal sealed class BubbleChatView : UserControl
             : $"대화 {_items.Count}개 · 마지막: {(last.Kind == ChatItemKind.Mine ? "나" : last.Sender)}: {last.DisplayText}";
     }
 
+    /// <summary>말풍선 하나를 맨 끝에 추가한다. 맨 아래를 보고 있었거나 내가 보낸 메시지면 맨 아래로 스크롤한다.</summary>
     // [읽는 법] 순서가 중요하다: ① 추가하기 "전에" 맨 아래를 보고 있었는지 기록(추가하면 스크롤 범위가 늘어 판단이 달라지므로) ② 목록에 추가 ③ 너비가 같으면 새 말풍선 하나만 배치, 다르면 전체 재배치 ④ 아래를 보고 있었거나 내가 보낸 메시지면 맨 아래로 스크롤.
     public void AddItem(ChatItem item)
     {
@@ -528,6 +550,7 @@ internal sealed class BubbleChatView : UserControl
         return HitBubble(location) is { ReplyTo: not null } item && item.QuoteRect.Contains(p) ? item : null;
     }
 
+    /// <summary>파일, 공감 칩, 답장 인용, 댓글 칩, 아바타 위에서는 손 모양 커서로 바꾼다.</summary>
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -536,6 +559,7 @@ internal sealed class BubbleChatView : UserControl
         Cursor = hand ? Cursors.Hand : Cursors.Default;
     }
 
+    /// <summary>왼쪽 클릭 처리: 아바타(프로필), 댓글 칩, 공감 칩, 답장 인용(원문으로 이동), 파일(열기) 순으로 눌린 곳에 맞는 동작을 알린다.</summary>
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);
@@ -567,6 +591,7 @@ internal sealed class BubbleChatView : UserControl
             FileCommandRequested?.Invoke(item, FileCommand.Open);
     }
 
+    /// <summary>글 말풍선을 더블클릭하면 그 메시지에 댓글 달기(ReplyRequested)를 요청한다.</summary>
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
@@ -575,6 +600,7 @@ internal sealed class BubbleChatView : UserControl
             ReplyRequested?.Invoke(item);
     }
 
+    /// <summary>오른쪽 클릭 시 눌린 곳에 따라 파일 메뉴, 메시지 메뉴, 대화 복사 메뉴 중 하나를 띄운다.</summary>
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
@@ -650,9 +676,11 @@ internal sealed class BubbleChatView : UserControl
         AutoScrollPosition = new Point(0, Math.Max(0, item.Y - ClientSize.Height / 3));
     }
 
+    /// <summary>맨 아래(가장 최근 말풍선)로 스크롤한다.</summary>
     internal void ScrollToBottom()
         => AutoScrollPosition = new Point(0, Math.Max(0, AutoScrollMinSize.Height - ClientSize.Height));
 
+    /// <summary>너비가 바뀌면 말풍선을 전체 다시 배치한다 (맨 아래를 보고 있었다면 맨 아래를 유지).</summary>
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
@@ -665,6 +693,7 @@ internal sealed class BubbleChatView : UserControl
         Invalidate();
     }
 
+    /// <summary>마우스 휠로 스크롤하면 다시 그리고, 맨 위에 닿았는지 확인한다.</summary>
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
@@ -672,6 +701,7 @@ internal sealed class BubbleChatView : UserControl
         CheckReachedTop();
     }
 
+    /// <summary>스크롤 막대로 스크롤하면 다시 그리고, 맨 위에 닿았는지 확인한다.</summary>
     protected override void OnScroll(ScrollEventArgs se)
     {
         base.OnScroll(se);
@@ -693,6 +723,7 @@ internal sealed class BubbleChatView : UserControl
 
     // ───────── 그리기 ─────────
 
+    /// <summary>화면에 보이는 범위의 말풍선(과 검색 강조)만 직접 그린다.</summary>
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);

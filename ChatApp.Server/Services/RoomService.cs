@@ -80,6 +80,7 @@ namespace ChatApp.Server.Services;
 //   - 공지가 저장 안 된다 ............................... HandleNotice의 권한 검사와 길이 제한(RoomNoticeRequest.MaxLength)
 //   - 시각이 1ms씩 어긋난다 ............................. NowMs: DB DATETIME(3) 정밀도에 맞춰 마이크로초를 자른 값
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>방 만들기·입장·초대·나가기·삭제와 방 공지, 인원 설정, 읽음 처리를 담당하는 서비스.</summary>
 // [개념] 클래스 이름 바로 옆의 (sessions, rooms, ...)는 C# 12의 "기본 생성자"다. 이 값들이 클래스 안에서 그대로 필드처럼 쓰인다.
 //        DI(의존성 주입) 방식: 이 서비스는 필요한 부품(세션 관리자, 방 관리자, DB 저장소 ...)을 스스로 만들지 않고 밖에서 받는다.
 //        그래서 시험할 때 가짜 부품을 끼우기 쉽다. 마지막 Action roomListChanged는 "방 목록이 바뀌었다"고 알리는 신호 함수다.
@@ -136,6 +137,7 @@ public sealed class RoomService(
 
     // ───────── 만들기 ─────────
 
+    /// <summary>방 만들기 요청 처리: 이름·최대 인원을 검사하고 DB와 메모리에 방을 만든 뒤, 요청에 초대 대상이 있으면 바로 초대한다.</summary>
     public void HandleCreate(ClientSession session, Packet packet)
     {
         CreateRoomRequest? req = packet.GetData<CreateRoomRequest>();
@@ -185,6 +187,7 @@ public sealed class RoomService(
 
     // ───────── 입장 (공개 방) ─────────
 
+    /// <summary>공개 방 입장 요청 처리 (Target = 방 번호): 없는 방·비공개·정원 초과는 거절하고, 이미 멤버이면 다시 연결만 해 준다.</summary>
     public void HandleJoin(ClientSession session, Packet packet)
     {
         if (!int.TryParse(packet.Target, out int roomId))
@@ -238,6 +241,7 @@ public sealed class RoomService(
 
     // ───────── 초대 ─────────
 
+    /// <summary>초대 요청 처리: 그 방의 멤버만 (기본 방 제외) 사용 중인 계정을 초대할 수 있다.</summary>
     public void HandleInvite(ClientSession session, Packet packet)
     {
         RoomInviteRequest? req = packet.GetData<RoomInviteRequest>();
@@ -304,6 +308,7 @@ public sealed class RoomService(
 
     // ───────── 나가기 ─────────
 
+    /// <summary>방 나가기 요청 처리 (Target = 방 번호): 멤버에서 빠지며, 방장이 나가면 가장 오래된 멤버가 방장이 되고 마지막 멤버가 나가면 방이 닫힌다.</summary>
     public void HandleLeave(ClientSession session, Packet packet)
     {
         if (!int.TryParse(packet.Target, out int roomId))

@@ -51,10 +51,13 @@ namespace ChatApp.Server.Core;
 //   - 방 목록의 인원수가 다르다 ................... Room.ToInfo(MemberCount = 멤버 수, OnlineCount = 접속 수)
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>방 입장 시도 결과 (성공, 방 없음, 정원 초과, 이미 입장, 비공개 방).</summary>
 public enum JoinResult { Ok, NotFound, Full, AlreadyIn, Private }
 
+/// <summary>방 퇴장 시도 결과 (성공, 방 없음, 멤버 아님, 기본 방은 나갈 수 없음).</summary>
 public enum LeaveResult { Ok, NotFound, NotMember, Lobby }
 
+/// <summary>모든 채팅방의 목록과 입장·퇴장·접속 연결을 하나의 lock으로 관리하는 클래스 (스레드 안전).</summary>
 public sealed class RoomManager
 {
     private readonly object _lock = new();
@@ -77,6 +80,7 @@ public sealed class RoomManager
                 _rooms[room.Id] = room;
     }
 
+    /// <summary>현재 방 개수 (기본 방 포함).</summary>
     public int RoomCount { get { lock (_lock) return _rooms.Count; } }
 
     // ───────── 조회 ─────────
@@ -101,6 +105,7 @@ public sealed class RoomManager
                          .OrderBy(r => r.Id).Select(r => r.ToInfo()).ToList();
     }
 
+    /// <summary>방 하나의 전달용 <see cref="RoomInfo"/>를 lock 안에서 만들어 돌려준다 (withMembers가 true면 멤버 목록 포함).</summary>
     public RoomInfo GetInfo(Room room, bool withMembers = false)
     {
         lock (_lock) return room.ToInfo(withMembers);
@@ -113,11 +118,13 @@ public sealed class RoomManager
             return _rooms.TryGetValue(roomId, out Room? room) && session.JoinedRooms.Contains(room) ? room : null;
     }
 
+    /// <summary>방 번호로 방을 찾는다. 없으면 null.</summary>
     public Room? Find(int roomId)
     {
         lock (_lock) return _rooms.GetValueOrDefault(roomId);
     }
 
+    /// <summary>방의 고정 공지를 바꾼다. 그 방이 이미 삭제되었거나 다른 객체로 바뀌었으면 false.</summary>
     public bool SetPinnedNotice(Room room, string text)
     {
         lock (_lock)

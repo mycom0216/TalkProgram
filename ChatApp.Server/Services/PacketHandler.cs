@@ -62,6 +62,7 @@ namespace ChatApp.Server.Services;
 //   - 목록이 0.2초쯤 늦게 갱신된다 ... 정상(FlushLists의 묶음 방송)
 //   - 관리자 기능이 거절된다 .......... HandleAdmin의 IsAdmin 확인, 감사 로그의 Denied 기록
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>받은 패킷을 종류별로 담당 서비스(인증·방·메시지·파일·친구·프로필·관리자)에 나눠 주고, 접속자·방 목록 방송을 관리하는 클래스.</summary>
 public sealed class PacketHandler
 {
     private readonly SessionManager _sessions;
@@ -80,10 +81,12 @@ public sealed class PacketHandler
     private readonly RateLimiter _loginLimiter = new(capacity: 10, refillPerMinute: 10);
     private readonly RateLimiter _registerLimiter = new(capacity: 3, refillPerMinute: 0.3);
 
+    /// <summary>서버 로거 (ClientSession이 수신·송신 오류를 남길 때도 쓴다).</summary>
     public ServerLogger Log { get; }
     private readonly FriendService _friendService;
     private readonly ProfileService _profileService;
 
+    /// <summary>필요한 부품을 받아 방·메시지·친구·프로필 서비스를 만들어 연결한다.</summary>
     public PacketHandler(SessionManager sessions, RoomManager rooms, AuthService auth, RoomRepository roomRepository,
                          MessageRepository messageRepository, UserRepository users, FileService files, MessageStore messages,
                          AdminService admin, AuditLog audit, ServerConfig config, ServerLogger log)
@@ -103,6 +106,7 @@ public sealed class PacketHandler
         _profileService = new ProfileService(users, config.UploadRoot, log, BroadcastUserList);
     }
 
+    /// <summary>패킷 하나를 처리한다. 로그인 전·임시 비밀번호 상태에서는 허용된 종류만 통과시키고, 나머지는 종류에 맞는 서비스로 보낸다. DB 오류는 여기서 잡아 응답한다.</summary>
     public void Handle(ClientSession session, Packet packet)
     {
         // 로그인 전에는 서버 안내/회원가입/로그인/핑만 허용
@@ -548,6 +552,7 @@ public sealed class PacketHandler
     /// <summary>목록 방송 타이머 시작 (ChatServer.Start에서 1번).</summary>
     public void StartListBroadcaster() => _listTimer = new Timer(_ => FlushLists(), null, ListBroadcastMs, ListBroadcastMs);
 
+    /// <summary>목록 방송 타이머를 멈춘다 (서버 종료 때 ChatServer.Stop에서 부른다).</summary>
     public void StopListBroadcaster() => _listTimer?.Dispose();
 
     private void FlushLists()

@@ -57,6 +57,7 @@ namespace ChatApp.Server.Services;
 //   - 감사 기록이 버려진 횟수를 세어 관리자 화면·종료 시 요약으로 보여 주기
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>감사 기록을 큐에 모았다가 전용 스레드가 묶음으로 DB에 저장하는 클래스 (기록하는 쪽은 기다리지 않는다).</summary>
 public sealed class AuditLog : IDisposable
 {
     private const int BatchSize = 100;
@@ -66,6 +67,7 @@ public sealed class AuditLog : IDisposable
     private readonly BlockingCollection<AuditRecord> _queue = new(boundedCapacity: 50_000);
     private readonly Thread _thread;
 
+    /// <summary>저장소와 로거를 받아 감사 기록 저장 스레드(AuditWriter)를 시작한다.</summary>
     public AuditLog(AuditRepository repository, ServerLogger log)
     {
         _repository = repository;

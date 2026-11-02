@@ -57,16 +57,25 @@ namespace ChatApp.Client.Forms;
 // [읽는 법] 카드에서 가능한 "하고 싶은 일" 목록. 메인 창이 switch로 받아 실제 처리를 연결한다(이 창은 처리하지 않는다).
 internal enum ProfileAction
 {
+    /// <summary>이 사람과 1:1 대화창을 연다.</summary>
     Chat,
+    /// <summary>이 사람을 친구로 추가한다.</summary>
     AddFriend,
+    /// <summary>이 사람을 친구 목록에서 뺀다 (확인 후).</summary>
     RemoveFriend,
+    /// <summary>내 프로필 사진을 바꾼다.</summary>
     ChangePhoto,
+    /// <summary>내 프로필 사진을 지운다.</summary>
     RemovePhoto,
+    /// <summary>내 프로필 카드의 배경 사진을 바꾼다.</summary>
     ChangeBackground,
+    /// <summary>내 프로필 카드의 배경 사진을 지운다.</summary>
     RemoveBackground,
+    /// <summary>내 상태 메시지를 바꾼다.</summary>
     ChangeStatusMessage,
 }
 
+/// <summary>사람 한 명의 프로필 카드 창. 사진·이름·상태를 그리고, 누른 동작은 ActionRequested로 메인 창에 알린다.</summary>
 internal sealed class ProfileCardForm : Form
 {
     private readonly AvatarCache _avatars;
@@ -87,6 +96,7 @@ internal sealed class ProfileCardForm : Form
     /// <summary>지금 보여 주는 사람의 사원번호.</summary>
     public string EmployeeNo => _user.EmployeeNo;
 
+    /// <summary>프로필 카드를 만든다. isMe는 내 카드인지, isFriend는 친구인지, online은 접속 중인지.</summary>
     public ProfileCardForm(UserInfo user, bool isMe, bool isFriend, bool online, AvatarCache avatars)
     {
         _user = user;
@@ -198,6 +208,7 @@ internal sealed class ProfileCardForm : Form
 
     // ───────── 그리기 ─────────
 
+    /// <summary>카드 전체(배경, 사진, 이름, 상태 글)를 직접 그린다.</summary>
     // [읽는 법] 아래 ①~⑤ 순서가 곧 "아래층 → 위층" 그리는 순서다(나중에 그린 것이 위에 보임). 사진/알약의 사각형은 그리는 김에 필드에 저장해 마우스 처리에서 재사용한다.
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -319,12 +330,14 @@ internal sealed class ProfileCardForm : Form
 
     // ───────── 마우스 (내 카드: 사진 누르면 바꾸기, 왼쪽 위 알약 누르면 배경 바꾸기) ─────────
 
+    /// <summary>내 카드에서 사진이나 배경 알약 위에 마우스가 있으면 손 모양 커서로 바꾼다.</summary>
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
         Cursor = _isMe && (_avatarRect.Contains(e.Location) || _backgroundPill.Contains(e.Location)) ? Cursors.Hand : Cursors.Default;
     }
 
+    /// <summary>내 카드에서 사진을 누르면 사진 바꾸기, 배경 알약을 누르면 배경 바꾸기를 요청한다.</summary>
     // [읽는 법] 남의 카드는 사진을 눌러도 아무 일도 없다(_isMe가 아니면 return). 내 카드에서만 왼쪽 클릭의 위치로 "사진 바꾸기"/"배경 바꾸기"를 가른다.
     protected override void OnMouseClick(MouseEventArgs e)
     {

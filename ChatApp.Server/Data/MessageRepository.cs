@@ -153,6 +153,7 @@ public sealed class MessageRepository(Db db)
                                Convert.ToInt32(r.GetValue(8)) == 1);
     }
 
+    /// <summary>삭제되지 않은 메시지의 내용을 바꾸고 수정 시각을 기록한다. 바뀐 행이 있으면 true, 없으면(없는/삭제된 메시지) false.</summary>
     public bool MarkEdited(long messageId, string content)
     {
         using DbConnection conn = db.Open();

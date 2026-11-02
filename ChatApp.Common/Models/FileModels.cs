@@ -12,7 +12,15 @@ namespace ChatApp.Common.Models;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// <summary>파일 종류. 말풍선 모양(사진 미리보기 / 동영상 ▶ 카드 / 일반 파일 카드)을 정하는 데 쓴다.</summary>
-public enum FileKind { File, Image, Video }
+public enum FileKind
+{
+    /// <summary>그 밖의 일반 파일 (일반 파일 카드로 표시).</summary>
+    File,
+    /// <summary>사진 (미리보기 말풍선으로 표시).</summary>
+    Image,
+    /// <summary>동영상 (▶ 카드로 표시).</summary>
+    Video,
+}
 
 /// <summary>파일 올리기 요청 (클라이언트 → 서버, FileUploadReq의 Data).</summary>
 public sealed class FileOffer
@@ -22,8 +30,10 @@ public sealed class FileOffer
     //   이후 진행률·완료 패킷을 이 ID로 짝지을 수 있다. 서버는 형식(IsValidFileId)과 중복(DB PRIMARY KEY)을 검사한다.
     // [개념] GUID: 전 세계에서 사실상 겹치지 않는 128비트 무작위 값. "N" 형식은 하이픈 없는 16진수 32글자.
     public string FileId { get; set; } = "";
+    /// <summary>올릴 파일 이름(확장자 포함, 경로 제외).</summary>
     public string FileName { get; set; } = "";
-    public long Size { get; set; }  // 바이트 단위. 3GB까지 담으려고 long
+    /// <summary>파일 크기(바이트).</summary>
+    public long Size { get; set; }
 
     /// <summary>방에 보낼 때 방 번호. 1:1이면 null.</summary>
     // [개념] int? : null이 될 수 있는 int (Nullable 값 형식). "값 없음"을 0 같은 특수값 대신 null로 표현한다.
@@ -43,15 +53,25 @@ public sealed class FileOffer
 //   (방에 100명이 있을 때 100명 모두에게 3GB를 미리 보내면 네트워크가 마비된다 → "필요할 때 받기")
 public sealed class SharedFile
 {
+    /// <summary>파일 ID (GUID "N" 형식 32자).</summary>
     public string FileId { get; set; } = "";
+    /// <summary>파일 이름(확장자 포함).</summary>
     public string FileName { get; set; } = "";
+    /// <summary>파일 크기(바이트).</summary>
     public long Size { get; set; }
+    /// <summary>파일 종류(일반 파일 / 사진 / 동영상).</summary>
     public FileKind Kind { get; set; }
+    /// <summary>방에 보낸 파일이면 방 번호. 1:1이면 null.</summary>
     public int? RoomId { get; set; }
+    /// <summary>1:1로 보낸 파일이면 받는 사람 사원번호. 방이면 null.</summary>
     public string? ToEmployeeNo { get; set; }
+    /// <summary>보낸 사람 사원번호.</summary>
     public string SenderNo { get; set; } = "";
+    /// <summary>보낸 사람 표시 이름.</summary>
     public string SenderName { get; set; } = "";
+    /// <summary>이미지 미리보기(JPEG 바이트). 없으면 null이고 파일 카드로 표시한다.</summary>
     public byte[]? Thumbnail { get; set; }
+    /// <summary>파일을 보낸 시각(UTC, 기본값은 객체를 만든 시각).</summary>
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>화면 표시용 크기 문자열 (예: "160.6 MB").</summary>
@@ -62,41 +82,55 @@ public sealed class SharedFile
 /// <summary>방 파일 보관함의 과거 페이지 요청. Before/BeforeFileId는 직전 페이지에서 가장 오래된 항목.</summary>
 public sealed class RoomFilesRequest
 {
+    /// <summary>파일 보관함을 볼 방 번호.</summary>
     public int RoomId { get; set; }
+    /// <summary>직전 페이지에서 가장 오래된 파일의 시각. 첫 페이지 요청이면 null.</summary>
     public DateTime? Before { get; set; }
+    /// <summary>직전 페이지에서 가장 오래된 파일의 ID(같은 시각의 항목을 구분). 첫 페이지 요청이면 null.</summary>
     public string? BeforeFileId { get; set; }
 }
 
 /// <summary>방 파일 보관함의 메타데이터 페이지. 원본과 미리보기 바이트는 포함하지 않는다.</summary>
 public sealed class RoomFilesBatch
 {
+    /// <summary>이 묶음이 속한 방 번호.</summary>
     public int RoomId { get; set; }
+    /// <summary>이번 페이지의 파일 정보 목록(한 페이지 50개).</summary>
     public List<SharedFile> Files { get; set; } = [];
+    /// <summary>이 페이지보다 오래된 파일이 더 있는지.</summary>
     public bool HasMore { get; set; }
 }
 
 /// <summary>파일 전송 규칙. 서버와 클라이언트가 같은 값을 쓴다.</summary>
 public static class FileRules
 {
+    /// <summary>파일 1개의 기본 최대 크기(3GB, 바이트).</summary>
     // [개념] 3L : 숫자 뒤의 L은 long 리터럴. 3 * 1024 * 1024 * 1024를 int로 계산하면 21억을 넘어 오버플로가 나므로
     //   처음 값부터 long으로 만들어 계산 전체가 64비트로 되게 한다.
-    public const long DefaultMaxFileSize = 3L * 1024 * 1024 * 1024; // 3GB
+    public const long DefaultMaxFileSize = 3L * 1024 * 1024 * 1024;
+    /// <summary>전송 조각 하나의 크기(256KB, 바이트). Base64로 늘어나도(약 350KB) 패킷 최대(1MB)보다 작다.</summary>
     // [왜] 조각이 너무 작으면 패킷 수가 많아져 느리고(3GB / 64KB = 약 5만 개), 너무 크면 조각 하나를 보내는 동안
     //   채팅 패킷이 오래 기다린다. 256KB는 그 사이의 절충값이다.
-    public const int ChunkSize = 256 * 1024;                   // 조각 크기. Base64로 늘어나도(약 350KB) 패킷 최대(1MB)보다 작다
-    public const long MaxThumbnailSourceSize = 50L * 1024 * 1024; // 이보다 큰 사진은 미리보기를 만들지 않는다(메모리 보호)
+    public const int ChunkSize = 256 * 1024;
+    /// <summary>미리보기를 만들 원본 사진의 최대 크기(50MB, 바이트). 이보다 크면 미리보기를 만들지 않는다.</summary>
+    public const long MaxThumbnailSourceSize = 50L * 1024 * 1024;
+    /// <summary>미리보기(JPEG) 최대 크기(200KB, 바이트).</summary>
     // [왜] 미리보기는 FileMsg 패킷에 실려 방 사람 모두에게 가므로 작게 제한한다(패킷 최대 1MB도 넘지 않게).
     public const int MaxThumbnailBytes = 200 * 1024;
+    /// <summary>파일 이름 최대 길이(120자). 넘으면 SanitizeFileName이 확장자를 살려 자른다.</summary>
     public const int MaxFileNameLength = 120;
+    /// <summary>동시에 전송하는 파일 수(3개). 클라이언트의 동시 올리기 수이자 서버의 1인당 동시 내려받기 수.</summary>
     // [왜] 내려받기는 파일마다 서버 스레드를 하나씩 쓰므로 1인당 동시 3개까지만 받는다(나머지는 잠시 후 다시).
     //      올리기는 개수 제한이 없다: 클라이언트가 3개씩 차례로 보내고 나머지는 자동으로 기다렸다가 이어서 보낸다.
-    public const int MaxActiveTransfers = 3;                   // 클라이언트 동시 올리기 수 · 서버 1인당 동시 내려받기 수
+    public const int MaxActiveTransfers = 3;
 
+    /// <summary>사진으로 취급하는 확장자 집합(소문자, 점 포함).</summary>
     // [개념] HashSet: 중복 없는 집합. Contains(포함 여부 확인)가 리스트보다 훨씬 빠르다(평균 O(1)).
     // [개념] static readonly: 프로그램이 시작될 때 한 번 만들어지고 다시 대입할 수 없는 공유 값.
     //   (집합 내용 자체는 바꿀 수 있지만 이 코드에서는 읽기만 하므로 여러 스레드가 동시에 읽어도 안전하다)
     public static readonly HashSet<string> ImageExtensions =
         [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".tif", ".tiff"];
+    /// <summary>동영상으로 취급하는 확장자 집합(소문자, 점 포함).</summary>
     public static readonly HashSet<string> VideoExtensions =
         [".mp4", ".mov", ".avi", ".mkv", ".wmv", ".webm", ".m4v", ".flv", ".3gp"];
 
@@ -121,6 +155,7 @@ public static class FileRules
         return FileKind.File;
     }
 
+    /// <summary>파일 이름의 확장자가 실행될 수 있는 위험 확장자 목록에 있으면 true.</summary>
     public static bool IsExecutable(string fileName) => ExecutableExtensions.Contains(Extension(fileName));
 
     /// <summary>".JPG" → ".jpg" 처럼 소문자 확장자. 점이 없으면 빈 문자열.</summary>
@@ -140,6 +175,7 @@ public static class FileRules
     public static bool IsValidFileId(string? id)
         => id is { Length: 32 } && id.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    /// <summary>새 파일 ID(GUID "N" 형식 32자)를 만들어 돌려준다.</summary>
     public static string NewFileId() => Guid.NewGuid().ToString("N");
 
     /// <summary>

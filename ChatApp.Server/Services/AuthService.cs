@@ -111,6 +111,7 @@ public sealed class AuthService
     // 이메일 검사 정규식. 허용 도메인 설정에 따라 패턴이 달라지므로 static이 아니라 생성자에서 만든다.
     private readonly Regex _emailRegex;
 
+    /// <summary>회원 저장소와 설정을 받아 인증 서비스를 만든다 (허용 이메일 도메인 설정에 맞춰 이메일 검사 패턴도 만든다).</summary>
     public AuthService(UserRepository users, ServerConfig config)
     {
         _users = users;
@@ -334,6 +335,7 @@ public sealed class AuthService
         return (info, $"{info.DisplayName}님, 환영합니다!");
     }
 
+    /// <summary>LDAP에서 읽어 온 프로필 (표시 이름, 부서, 직급). 읽지 못한 값은 null.</summary>
     private sealed record LdapProfile(string? Name, string? Department, string? Position);
 
     // [전체 흐름] ① 설정 확인(꺼져 있거나 서버·도메인 없음 → false) ② LDAPS 연결 만들기(포트, 타임아웃 1~20초로 제한) ③ connection.Bind() = 사용자 계정으로 로그인 시도(성공하면 비밀번호가 맞은 것)

@@ -24,13 +24,16 @@ namespace ChatApp.Client.Forms;
 //   - 저장과 지우기가 둘 다 OK로 닫히므로, 부르는 쪽은 Message가 빈 문자열인지로 삭제 여부를 구분한다.
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>내 상태 메시지를 입력하거나 지우는 창.</summary>
 public sealed class StatusMessageForm : Form
 {
     private readonly TextBox _message = new() { MaxLength = StatusUpdate.MaxMessageLength };
 
+    /// <summary>입력한 상태 메시지 (앞뒤 공백 제거). 빈 문자열이면 상태 메시지를 지운다는 뜻이다.</summary>
     // [읽는 법] 출력값(앞뒤 공백 제거). 빈 문자열이면 상태 메시지를 지우는 것이다.
     public string Message => _message.Text.Trim();
 
+    /// <summary>상태 메시지 창을 만든다. current는 입력칸에 처음 채울 현재 상태 메시지.</summary>
     public StatusMessageForm(string current)
     {
         Text = "상태 메시지";

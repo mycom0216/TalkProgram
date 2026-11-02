@@ -87,6 +87,7 @@ public sealed class LoginForm : Form
     // [왜] 입력칸마다 new Font를 만들면 창을 닫아도 GDI 글꼴이 남는다(로그아웃·재로그인 때마다 쌓임). 하나를 함께 쓴다.
     private static readonly Font InputFont = new(Theme.Body.FontFamily, 11F);
 
+    /// <summary>로그인 창을 만든다. settings에서 마지막 서버·사원번호를 불러와 채운다.</summary>
     public LoginForm(ChatClient client, ClientSettings settings)
     {
         _client = client;

@@ -155,11 +155,15 @@ public sealed class ChatClient : IDisposable
     /// <summary>서버와 연결이 끊김 (수신 스레드에서 발생). 사용자가 직접 종료한 경우는 발생하지 않음.</summary>
     public event Action<string>? Disconnected;
 
+    /// <summary>서버와 연결되어 있는지 (연결 전이거나 끊겼으면 false).</summary>
     // [개념] Volatile.Read: 다른 스레드가 쓴 _closed 값을 최신으로 읽는다.
     public bool IsConnected => _tcp is not null && Volatile.Read(ref _closed) == 0;
 
+    /// <summary>접속을 시도한 서버 주소 (접속 전에는 빈 문자열).</summary>
     // [개념] { get; private set; }: 바깥에서는 읽기만, 값 변경은 이 클래스 안에서만.
     public string Host { get; private set; } = "";
+
+    /// <summary>접속을 시도한 서버 포트 (접속 전에는 0).</summary>
     public int Port { get; private set; }
 
     /// <summary>로그인한 내 정보. 로그인 전에는 null.</summary>
@@ -171,6 +175,8 @@ public sealed class ChatClient : IDisposable
     ///        더 안전하게 하려면 로그인 때 서버가 "재접속 토큰"을 발급하는 방식으로 바꿀 수 있다(서버 재시작에는 약함).
     /// </summary>
     public LoginRequest? LastLogin { get; set; }
+
+    /// <summary>자동 로그인 토큰으로 로그인한 정보. 자동 재접속 때 비밀번호 대신 쓴다 (없으면 null).</summary>
     public TokenLoginRequest? LastTokenLogin { get; set; }
 
     /// <summary>서버가 ForceLogout을 보내 끊은 경우 true (다른 곳에서 로그인). 이때는 자동 재접속을 하면 안 된다.</summary>
@@ -568,5 +574,6 @@ public sealed class ChatClient : IDisposable
         }
     }
 
+    /// <summary>객체를 버릴 때 연결을 끊는다 (Disconnect와 같다).</summary>
     public void Dispose() => Disconnect();
 }

@@ -46,6 +46,7 @@ namespace ChatApp.Server.Data;
 // [읽는 법] DB에 쓰기 전의 감사 로그 한 건(값 묶음). 시각은 기록 요청 시점에 정해져 큐에 들어가므로, 저장이 늦어져도 "일어난 시각"이 유지된다. 행위자·대상·상세·IP는 해당이 없으면 null이다(서버 시작 같은 항목).
 public sealed record AuditRecord(DateTime Time, string? ActorNo, string Action, string? TargetNo, string? Detail, string? ClientIp);
 
+/// <summary>audit_logs 표에 감사 로그를 저장하는 저장소.</summary>
 public sealed class AuditRepository(Db db)
 {
     /// <summary>여러 건을 트랜잭션 하나로 저장한다 (한 건씩 커밋하는 것보다 훨씬 빠르다).</summary>

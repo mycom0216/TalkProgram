@@ -51,6 +51,7 @@ namespace ChatApp.Server;
 /// </summary>
 public sealed class ServerConfig
 {
+    /// <summary>서버가 접속을 받을 TCP 포트 (기본 9000, 실행 인자로 첫 값을 주면 그 값으로 바뀐다).</summary>
     public int Port { get; set; } = 9000;
 
     /// <summary>MariaDB 연결 문자열.</summary>
@@ -111,9 +112,11 @@ public sealed class ServerConfig
     /// <summary>파일 1개 최대 크기(MB).</summary>
     public int MaxFileSizeMB { get; set; } = 3072; // 3GB
 
+    /// <summary>파일 1개 최대 크기를 바이트로 환산한 값 (MaxFileSizeMB가 1보다 작으면 1MB로 본다).</summary>
     // [읽는 법] MB → 바이트 변환. Math.Max(1, ...)로 0이나 음수를 쓴 실수를 최소 1MB로 보정한다. 1024L의 L은 long(64비트)이라는 표시 — int로 곱하면 3GB(약 32억)가 int 최대값(약 21억)을 넘어 계산이 틀어진다.
     public long MaxFileSizeBytes => Math.Max(1, MaxFileSizeMB) * 1024L * 1024L;
 
+    /// <summary>업로드 폴더(UploadFolder)를 서버 exe 폴더 기준 절대 경로로 바꾼 값.</summary>
     // [읽는 법] 상대 경로("uploads")를 "서버 exe가 있는 폴더 기준 절대 경로"로 바꾼다. 실행 위치(현재 폴더)가 달라도 항상 같은 곳에 저장된다. FileService.FullPath의 경로 조작 방어가 이 값을 기준(_root)으로 삼는다.
     public string UploadRoot => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, UploadFolder));
 
@@ -171,6 +174,7 @@ public sealed class ServerConfig
     /// <summary>선택적 Active Directory/LDAP 인증 설정. LDAPS(SSL)는 항상 사용한다.</summary>
     public LdapConfig Ldap { get; set; } = new();
 
+    /// <summary>appsettings.json을 읽어 설정을 만들고 환경 변수 덮어쓰기를 적용한다. 내용이 JSON null이면 InvalidDataException을 던진다.</summary>
     public static ServerConfig Load(string path)
     {
         string json = File.ReadAllText(path);
@@ -217,20 +221,40 @@ public sealed class TlsConfig
     // [읽는 법] 비밀번호의 기본값이 빈 문자열이라 설정을 안 해도 만들어지지만, 운영에서는 반드시 값을 넣고 이 파일(appsettings.json)을 Git에 올리지 않아야 한다.
     public string CertificatePassword { get; set; } = "";
 
+    /// <summary>인증서 경로(CertificatePath)를 서버 exe 폴더 기준 절대 경로로 바꾼 값.</summary>
     public string CertificateFullPath => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, CertificatePath));
 }
 
+/// <summary>appsettings.json의 "Ldap" 항목 (Active Directory/LDAP 로그인 설정).</summary>
 public sealed class LdapConfig
 {
+    /// <summary>true면 LDAP 계정의 로그인을 디렉터리로 인증한다 (기본 false).</summary>
     public bool Enabled { get; set; }
+
+    /// <summary>LDAP 서버 호스트 이름(FQDN). 비어 있으면 LDAP 인증을 하지 않는다.</summary>
     public string Server { get; set; } = "";
+
+    /// <summary>LDAP 서버 포트 (기본 636, LDAPS).</summary>
     public int Port { get; set; } = 636;
+
+    /// <summary>로그인 계정 "사원번호@접미사"에 붙일 UPN 접미사(앞의 @는 있어도 없어도 됨). 비어 있으면 LDAP 인증을 하지 않는다.</summary>
     public string UserPrincipalNameSuffix { get; set; } = "";
+
+    /// <summary>LDAP 연결 제한 시간(초, 기본 5). 사용할 때 1~20초 범위로 보정한다.</summary>
     public int TimeoutSeconds { get; set; } = 5;
+
     /// <summary>선택. 설정하면 로그인 성공 후 허용된 프로필 필드만 동기화한다. 계정 자동 생성/권한 부여는 하지 않는다.</summary>
     public string ProfileBaseDn { get; set; } = "";
+
+    /// <summary>프로필 조회 때 사원번호와 비교해 사용자 항목을 찾는 LDAP 속성 이름 (기본 sAMAccountName).</summary>
     public string EmployeeNumberAttribute { get; set; } = "sAMAccountName";
+
+    /// <summary>표시 이름을 읽어 올 LDAP 속성 이름 (기본 displayName).</summary>
     public string DisplayNameAttribute { get; set; } = "displayName";
+
+    /// <summary>부서를 읽어 올 LDAP 속성 이름 (기본 department).</summary>
     public string DepartmentAttribute { get; set; } = "department";
+
+    /// <summary>직급을 읽어 올 LDAP 속성 이름 (기본 title).</summary>
     public string PositionAttribute { get; set; } = "title";
 }

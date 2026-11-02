@@ -70,6 +70,7 @@ namespace ChatApp.Client.Forms;
 //   - 화면이 갱신되지 않는다 .............. 새 PacketType을 HandlePacket에 추가했는지(switch에 없으면 무시됨)
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메인 창(partial) - 서버 패킷 수신, 연결 끊김·자동 재접속, 패킷 종류별 처리 부분.</summary>
 public sealed partial class MainForm
 {
     // ───────────────────────── 수신 (수신 스레드 → UI 스레드) ─────────────────────────

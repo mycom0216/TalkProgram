@@ -39,6 +39,7 @@ namespace ChatApp.Client.Forms;
 //   - 알림 안에 보이는 메시지 본문은 그대로 그려지므로, 화면 공유 중에는 내용이 노출될 수 있다(방해 금지 상태에서는 MainForm.ShowToast가 토스트를 아예 만들지 않는다 — 코드로 확인함).
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>화면 오른쪽 아래에 5초 동안 뜨는 새 메시지 알림 창. 누르면 Click으로 알리고 닫힌다.</summary>
 internal sealed class ToastForm : Form
 {
     private const int ShowMilliseconds = 5000;
@@ -51,6 +52,7 @@ internal sealed class ToastForm : Form
 
     private int S(int v) => LogicalToDeviceUnits(v);
 
+    /// <summary>알림 창을 만든다. title은 제목(보낸 사람/방), text는 본문, avatarKey는 아바타 색 키.</summary>
     public ToastForm(string title, string text, string avatarKey)
     {
         _title = title;
@@ -84,6 +86,7 @@ internal sealed class ToastForm : Form
     /// <summary>[개념] true면 Show() 해도 이 창이 활성(포커스)되지 않는다. 지금 쓰고 있는 프로그램의 입력이 끊기지 않는다.</summary>
     protected override bool ShowWithoutActivation => true;
 
+    /// <summary>알림을 누르면 Click을 알린 뒤 창을 닫는다.</summary>
     // [주의] base.OnClick을 먼저 불러 구독자(MainForm)에게 Click을 알린 다음에 닫는다. 순서를 바꾸면 닫힌 창에서 이벤트가 나갈 수 있다.
     protected override void OnClick(EventArgs e)
     {
@@ -91,6 +94,7 @@ internal sealed class ToastForm : Form
         Close();
     }
 
+    /// <summary>테두리, 왼쪽 하늘색 띠, 아바타, 제목, 본문을 직접 그린다.</summary>
     protected override void OnPaint(PaintEventArgs e)
     {
         Graphics g = e.Graphics;

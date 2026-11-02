@@ -22,9 +22,11 @@ namespace ChatApp.Client.Forms;
 internal sealed class RoomNoticeForm : Form
 {
     private readonly TextBox _text = new() { Multiline = true, AcceptsReturn = true, MaxLength = 200, ScrollBars = ScrollBars.Vertical };
+    /// <summary>입력한 공지 내용 (앞뒤 공백 제거). 빈 문자열이면 공지를 지운다는 뜻이다.</summary>
     // [읽는 법] 출력값. DialogResult.OK로 닫혔을 때 부르는 쪽이 읽는다. 빈 문자열이면 공지 삭제로 처리된다.
     public string NoticeText => _text.Text.Trim();
 
+    /// <summary>방 공지 창을 만든다. current는 입력칸에 처음 채울 현재 공지.</summary>
     public RoomNoticeForm(string roomName, string current)
     {
         Text = "방 공지 고정";

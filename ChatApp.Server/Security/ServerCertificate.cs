@@ -60,6 +60,7 @@ namespace ChatApp.Server.Security;
 //   - 인증서 비밀번호를 설정 파일 평문이 아닌 OS 보안 저장소/환경 변수에서 읽기
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>서버 TLS 인증서(.pfx)를 읽거나 자체 서명으로 만들어 주는 정적 도우미.</summary>
 public static class ServerCertificate
 {
     /// <summary>
@@ -130,11 +131,13 @@ public static class ServerCertificate
 /// <summary>서버 인증서와 핸드셰이크용 컨텍스트를 함께 들고 다닌다.</summary>
 public sealed class ServerTls(X509Certificate2 certificate, string fingerprint)
 {
+    /// <summary>서버 인증서 (개인 키 포함).</summary>
     public X509Certificate2 Certificate { get; } = certificate;
 
     /// <summary>"AB:CD:..." 형태의 SHA-256 지문 (서버 콘솔 /tls 명령에서 다시 보여 준다).</summary>
     public string Fingerprint { get; } = fingerprint;
 
+    /// <summary>접속마다 쓰는 TLS 핸드셰이크용 인증서 컨텍스트 (인증서 체인을 미리 만들어 둔 것).</summary>
     // [왜] offline: true → 체인을 만들 때 인터넷에서 중간 인증서를 내려받으려 하지 않는다(망분리 환경).
     public System.Net.Security.SslStreamCertificateContext Context { get; } =
         System.Net.Security.SslStreamCertificateContext.Create(certificate, null, offline: true);

@@ -117,25 +117,39 @@ namespace ChatApp.Server.Services;
 /// </summary>
 public sealed class FileService
 {
+    /// <summary>진행 중인 파일 올리기 1건의 상태 묶음 (FileService 안에서만 쓴다).</summary>
     // [개념] 중첩 클래스(nested class): FileService 안에서만 쓰는 "진행 중인 올리기 1건"의 상태 묶음.
     //   private이라 바깥에서는 보이지 않는다.
     // [개념] required: 객체를 만들 때 반드시 값을 넣어야 하는 속성(빠뜨리면 컴파일 오류).
     // [개념] init: 만들 때만 값을 넣을 수 있고 그 뒤로는 바꿀 수 없는 속성(읽기 전용처럼 동작).
     private sealed class Upload
     {
+        /// <summary>이 파일을 올리는 세션 (올리기 취소와 접속 종료 정리 때 주인을 구분한다).</summary>
         public required ClientSession Owner { get; init; }
+
+        /// <summary>이 파일의 DB 기록 정보.</summary>
         public required FileRecord Record { get; init; }
+
+        /// <summary>받는 동안 데이터를 쓰는 임시 파일 경로 (다 받으면 최종 위치로 옮긴다).</summary>
         public required string TempPath { get; init; }
+
+        /// <summary>임시 파일에 조각을 이어 쓰는 스트림.</summary>
         public required FileStream Stream { get; init; }
+
+        /// <summary>클라이언트가 보낸 미리보기 이미지 바이트. 없으면 null.</summary>
         public byte[]? Thumbnail { get; init; }
+
+        /// <summary>이 올리기 전용 lock 열쇠 (올리기끼리 서로 기다리지 않게 파일마다 따로 둔다).</summary>
         // [개념] lock에 쓸 "열쇠" 객체. lock(upload.Lock) { ... } 안에는 한 번에 한 스레드만 들어갈 수 있다.
         // [왜] 올리기마다 따로 lock을 두면, 서로 다른 파일 올리기끼리는 기다리지 않고 동시에 진행된다(전체를 하나의 lock으로 묶는 것보다 빠름).
         public readonly object Lock = new();
-        // 지금까지 받은 바이트 수 (3GB는 int 최대값 약 21억을 넘으므로 long)
+        /// <summary>지금까지 받은 바이트 수 (3GB는 int 최대값 약 21억을 넘으므로 long).</summary>
         public long Received;
-        // true = 끝났거나 취소됨. 이후 도착하는 조각은 무시한다. (Lock 안에서만 읽고 쓴다)
+
+        /// <summary>true = 끝났거나 취소됨. 이후 도착하는 조각은 무시한다. (Lock 안에서만 읽고 쓴다)</summary>
         public bool Closed;
-        // 마지막으로 조각을 받은 시각 (멈춘 업로드 정리용)
+
+        /// <summary>마지막으로 조각을 받은 시각 (Environment.TickCount64, 멈춘 올리기 정리용).</summary>
         public long LastActivityTicks = Environment.TickCount64;
     }
 
@@ -170,6 +184,7 @@ public sealed class FileService
     /// <summary>사원번호 → 사용 중인 사용자 (접속하지 않은 사람에게 1:1 파일을 보낼 때 확인용). 없으면 접속 중인 사람에게만 보낸다.</summary>
     private readonly Func<string, UserInfo?>? _findActiveUser;
 
+    /// <summary>파일 올리기·내려받기 서비스를 만든다. 임시 폴더(업로드 폴더\tmp)가 없으면 만든다.</summary>
     public FileService(SessionManager sessions, RoomManager rooms, FileRepository repository, ServerConfig config, ServerLogger log, AuditLog audit,
                        Func<string, UserInfo?>? findActiveUser = null)
     {

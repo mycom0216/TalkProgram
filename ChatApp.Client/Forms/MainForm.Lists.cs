@@ -58,6 +58,7 @@ namespace ChatApp.Client.Forms;
 //   - 탭 숫자가 이상하다 ................... "동료 N"은 접속 중인 사람(자기 제외) 수
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메인 창(partial) - 동료·친구 목록과 채팅방 목록 화면을 만드는 부분.</summary>
 public sealed partial class MainForm
 {
     private int UnreadOf(string key) => _conversations.TryGetValue(key, out Conversation? c) ? c.Unread : 0;

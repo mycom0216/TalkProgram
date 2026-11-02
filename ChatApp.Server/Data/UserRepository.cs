@@ -85,6 +85,7 @@ public sealed record UserRecord(
 /// </summary>
 public sealed class UserRepository(Db db)
 {
+    /// <summary>자동 로그인 토큰을 (사원번호, 기기)별로 저장한다. 원문이 아닌 SHA-256 해시만 저장하며, 같은 기기면 덮어쓴다.</summary>
     // [읽는 법] 자동 로그인용 토큰 발급 저장. 토큰 원문(token)은 클라이언트에게만 있고 DB에는 SHA-256 해시(16진 문자열)만 저장한다. (사원번호, 기기)가 키라서 같은 기기에서 다시 발급하면 ON DUPLICATE KEY UPDATE로 덮어쓰고 만료 시각을 갱신한다.
     public void IssueLoginToken(string employeeNo, string deviceId, string token, DateTime expiresAt)
     {
@@ -99,6 +100,7 @@ public sealed class UserRepository(Db db)
         cmd.ExecuteNonQuery();
     }
 
+    /// <summary>자동 로그인 토큰이 유효하면 true (해시 일치, 만료 전, ACTIVE 상태의 LOCAL 계정일 때만).</summary>
     // [읽는 법] 받은 토큰을 같은 방식으로 해시해 DB의 해시와 비교한다(원문은 어디에도 저장되지 않으므로 해시끼리 비교). 만료 전이어야 하고, 계정이 ACTIVE이며 LOCAL 계정일 때만 true. 위 주석처럼 LDAP 계정은 매번 디렉터리 인증을 다시 해서, 사내 계정이 비활성화되면 30일 토큰으로 계속 들어오지 못하게 한다.
     public bool ValidateLoginToken(string employeeNo, string deviceId, string token)
     {
@@ -429,6 +431,7 @@ public sealed class UserRepository(Db db)
         return cmd.ExecuteNonQuery() == 1;
     }
 
+    /// <summary>사용자의 역할(ADMIN/USER)을 바꾼다. 실제로 바뀌면 true, 이미 같은 역할이거나 대상이 없으면 false.</summary>
     // [읽는 법] 역할(ADMIN/USER) 변경. "role <> @role" 조건으로 이미 같은 역할이면 0행 → false("이미 관리자입니다" 안내). 마지막 관리자 보호는 이 함수가 아니라 AdminService가 lock 안에서 확인한다.
     public bool SetRole(string employeeNo, string role)
     {
@@ -528,6 +531,7 @@ public sealed class UserRepository(Db db)
     // [개념] 열 이름은 SQL 매개변수로 넘길 수 없다. 그래서 enum을 코드가 정한 두 문자열 중 하나로 바꾸는 "허용 목록" 방식으로 열 이름을 고른다. 사용자 입력이 열 이름이 되는 길이 없으므로 아래 $"..." 문자열 이어 붙임은 SQL 인젝션 위험이 없다.
     private static string PhotoColumn(PhotoKind kind) => kind == PhotoKind.Background ? "background_version" : "photo_version";
 
+    /// <summary>ACTIVE 사용자의 프로필(또는 배경) 사진 버전을 돌려준다. 사진이 없거나 계정이 없으면 0.</summary>
     public long GetPhotoVersion(string employeeNo, PhotoKind kind = PhotoKind.Profile)
     {
         using DbConnection conn = db.Open();
@@ -538,6 +542,7 @@ public sealed class UserRepository(Db db)
         return cmd.ExecuteScalar() is { } v and not DBNull ? Convert.ToInt64(v) : 0;
     }
 
+    /// <summary>사용자의 프로필(또는 배경) 사진 버전을 저장한다.</summary>
     public void SetPhotoVersion(string employeeNo, PhotoKind kind, long version)
     {
         using DbConnection conn = db.Open();
@@ -617,6 +622,7 @@ public sealed class UserRepository(Db db)
         return list;
     }
 
+    /// <summary>ownerNo가 friendNo를 친구로 등록했으면 true (방향이 있는 관계).</summary>
     public bool IsFriend(string ownerNo, string friendNo)
     {
         using DbConnection conn = db.Open();
@@ -627,6 +633,7 @@ public sealed class UserRepository(Db db)
         return cmd.ExecuteScalar() is not null;
     }
 
+    /// <summary>ownerNo가 등록한 친구 수.</summary>
     public int CountFriends(string ownerNo)
     {
         using DbConnection conn = db.Open();
@@ -648,6 +655,7 @@ public sealed class UserRepository(Db db)
         return cmd.ExecuteNonQuery() == 1;
     }
 
+    /// <summary>친구 등록을 지운다. 지운 줄이 있으면 true, 원래 친구가 아니었으면 false.</summary>
     public bool RemoveFriend(string ownerNo, string friendNo)
     {
         using DbConnection conn = db.Open();

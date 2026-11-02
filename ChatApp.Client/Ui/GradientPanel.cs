@@ -27,6 +27,7 @@ namespace ChatApp.Client.Ui;
 /// <summary>하늘색 그라데이션 배경 패널. 글자·아바타는 Paint 이벤트에서 직접 그린다.</summary>
 internal sealed class GradientPanel : Panel
 {
+    /// <summary>깜빡임 없이 직접 그리도록 더블 버퍼링과 크기 변경 시 다시 그리기를 설정한다.</summary>
     public GradientPanel()
     {
         // [개념] SetStyle로 컨트롤의 그리기 방식을 바꾼다.
@@ -39,6 +40,7 @@ internal sealed class GradientPanel : Panel
                  ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
     }
 
+    /// <summary>단색 대신 하늘색 그라데이션으로 패널 배경 전체를 칠한다.</summary>
     // [왜] 배경 칠하기(OnPaintBackground)를 재정의해 단색 대신 그라데이션을 칠한다.
     //      글자는 이 위에 Paint 이벤트(OnPaint)에서 그려지므로 순서가 자연스럽게 "배경 → 글자"가 된다.
     protected override void OnPaintBackground(PaintEventArgs e) => Theme.FillGradient(e.Graphics, ClientRectangle);

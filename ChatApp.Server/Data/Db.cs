@@ -90,8 +90,11 @@ public sealed class Db(string connectionString)
     // [읽는 법] 마이그레이션 SQL(db/migrate_00N)을 새로 만들 때마다 1씩 올리는 값. Program.cs가 시작할 때 DB의 실제 버전과 비교한다.
     public const int RequiredSchemaVersion = 13;
 
+    /// <summary>시각 값은 그대로 두고 Kind만 UTC로 표시해 돌려준다 (DB에 UTC로 저장된 값을 읽을 때 쓴다).</summary>
     // [읽는 법] SpecifyKind는 시각 값은 그대로 두고 "이 시각은 UTC다"라는 꼬리표(Kind)만 바꾼다. 시간대를 바꿔 계산하는 ToUniversalTime과 다르다 — DB에 이미 UTC로 저장돼 있으므로 꼬리표만 붙이는 것이 맞다. 아래 줄은 null 가능한 값(DateTime?)용 같은 이름의 짝(오버로드)이다.
     public static DateTime AsUtc(DateTime value) => DateTime.SpecifyKind(value, DateTimeKind.Utc);
+
+    /// <summary><see cref="AsUtc(DateTime)"/>의 null 허용 버전. null이면 null을 돌려준다.</summary>
     public static DateTime? AsUtc(DateTime? value) => value is DateTime dt ? AsUtc(dt) : null;
 
     /// <summary>DB에 적용된 마이그레이션 번호 (schema_version 표). 표가 없으면(migrate_005 전) 0.</summary>

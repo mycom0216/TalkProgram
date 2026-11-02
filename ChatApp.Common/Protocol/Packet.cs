@@ -118,5 +118,6 @@ public sealed class Packet
         return Interlocked.CompareExchange(ref _wire, wire, null) ?? wire;
     }
 
+    /// <summary>로그 출력용 문자열. "종류 from=보낸 사람 to=대상 body=본문" 형식이고, Bin이 있으면 크기가 붙는다.</summary>
     public override string ToString() => $"{Type} from={SenderId} to={Target} body={Body}{(Bin is null ? "" : $" bin={Bin.Length}B")}";
 }

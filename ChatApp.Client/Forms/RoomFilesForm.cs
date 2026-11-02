@@ -51,11 +51,17 @@ internal sealed class RoomFilesForm : Form
     private readonly HashSet<string> _fileIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Button _loadMore = new() { Text = "이전 파일 더 불러오기", AutoSize = true };
     private readonly Label _status = new() { AutoSize = true, Padding = new Padding(8, 8, 8, 8) };
+    /// <summary>목록에서 파일을 열려 할 때(더블클릭, 메뉴 "열기") 발생한다. 인수는 해당 파일 말풍선.</summary>
     public event Action<ChatItem>? OpenRequested;
+
+    /// <summary>목록에서 "다른 이름으로 저장"을 고를 때 발생한다. 인수는 해당 파일 말풍선.</summary>
     public event Action<ChatItem>? SaveRequested;
+
+    /// <summary>더 오래된 파일 목록을 서버에 요청해야 할 때 발생한다. 인수는 가진 것 중 가장 오래된 파일의 (시각, 번호).</summary>
     // [읽는 법] 인수 = (가장 오래된 파일의 시각, 그 파일 번호). 둘 다 null이면 "처음부터"(가진 파일이 하나도 없을 때). 서버가 이보다 오래된 파일을 찾아 보낸다.
     public event Action<DateTime?, string?>? LoadMoreRequested;
 
+    /// <summary>방 파일 모아보기 창을 만든다. items(지금 불러온 대화)에서 파일 말풍선만 골라 먼저 채운다.</summary>
     public RoomFilesForm(string roomName, IEnumerable<ChatItem> items)
     {
         _items = [];
@@ -92,6 +98,7 @@ internal sealed class RoomFilesForm : Form
         Controls.Add(footer);
     }
 
+    /// <summary>더 오래된 파일 목록을 요청한다 (이미 요청 중이면 무시).</summary>
     public void RequestNextPage() => BeginLoadMore();
 
     // [왜] 버튼을 즉시 끄고 "불러오는 중..."으로 바꿔 같은 요청이 겹치지 않게 한다. 응답이 오면 AddPage가 다시 켠다.
@@ -103,6 +110,7 @@ internal sealed class RoomFilesForm : Form
         LoadMoreRequested?.Invoke(OldestTime(), OldestFileId());
     }
 
+    /// <summary>서버에서 받은 파일 한 묶음을 목록에 이어 붙이고 버튼·상태 줄을 갱신한다. error가 있으면 "다시 시도" 상태가 된다.</summary>
     public void AddPage(IEnumerable<SharedFile> files, bool hasMore, string? error = null)
     {
         var additions = files.Select(file => new ChatItem

@@ -44,6 +44,7 @@ namespace ChatApp.Client.Ui;
 //   - 그림이 아닌 파일은 GDI+가 OutOfMemoryException으로 알린다(이름과 달리 형식 오류). 호출하는 MainForm.Profile이 이 예외를 잡아 안내한다(코드로 확인함).
 //   - 투명 PNG는 흰 배경으로 합쳐진다(JPEG가 투명을 지원하지 않기 때문).
 // ───────────────────────────────────────────────────────────────────────────
+/// <summary>프로필·배경 사진을 올리기 전에 크기와 용량에 맞는 JPEG로 만드는 이미지 도구.</summary>
 internal static class ImageTools
 {
     /// <summary>

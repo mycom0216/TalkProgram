@@ -9,15 +9,28 @@ namespace ChatApp.Common.Models;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// <summary>지난 메시지 종류.</summary>
-public enum HistoryKind { Chat, Whisper, File }
+public enum HistoryKind
+{
+    /// <summary>방 채팅 메시지.</summary>
+    Chat,
+    /// <summary>1:1 대화 메시지.</summary>
+    Whisper,
+    /// <summary>파일 메시지 (File 속성에 파일 정보가 들어 있다).</summary>
+    File,
+}
 
 /// <summary>DB에서 불러온 지난 메시지 1개.</summary>
 public sealed class HistoryItem
 {
+    /// <summary>메시지 종류(일반 채팅 / 귓속말 / 파일).</summary>
     public HistoryKind Kind { get; set; }
+    /// <summary>보낸 사람 사원번호.</summary>
     public string SenderNo { get; set; } = "";
-    public string SenderName { get; set; } = "";   // "홍길동 대리" (DB의 users 테이블과 JOIN해서 얻음)
+    /// <summary>보낸 사람 표시 이름. 예: "홍길동 대리" (DB의 users 테이블과 JOIN해서 얻음).</summary>
+    public string SenderName { get; set; } = "";
+    /// <summary>메시지 내용.</summary>
     public string Body { get; set; } = "";
+    /// <summary>메시지를 보낸 시각. 서버가 밀리초 단위로 잘라 보낸다.</summary>
     // [주의] 서버는 실시간 메시지 시각을 밀리초 단위로 잘라서 보낸다(DB가 밀리초까지만 저장하므로).
     //   그래야 클라이언트가 "실시간으로 받은 것"과 "기록에서 불러온 것"이 같은 메시지인지 시각으로 비교할 수 있다.
     public DateTime Time { get; set; }
@@ -34,6 +47,7 @@ public sealed class HistoryItem
     /// <summary>보낸 사람이 삭제한 메시지 (Body는 비어 있다).</summary>
     public bool Deleted { get; set; }
 
+    /// <summary>수정된 메시지인지.</summary>
     public bool Edited { get; set; }
 
     /// <summary>공감 현황 (없으면 null).</summary>
@@ -75,8 +89,12 @@ public sealed class HistoryBatch
 /// <summary>이전 대화 페이지 요청. 방/1:1 대상과 마지막으로 표시한 메시지 시각을 담는다.</summary>
 public sealed class HistoryRequest
 {
+    /// <summary>지난 대화를 요청할 방 번호. 1:1이면 null.</summary>
     public int? RoomId { get; set; }
+    /// <summary>1:1 대화의 상대 사원번호. 방이면 null.</summary>
     public string? PeerNo { get; set; }
+    /// <summary>화면에 있는 가장 오래된 메시지의 시각. 이보다 앞선 기록을 요청한다.</summary>
     public DateTime? Before { get; set; }
+    /// <summary>그 메시지의 키("M:" + 20자리 메시지 번호, 파일이면 "F:" + 파일 ID). 같은 시각의 항목을 구분한다.</summary>
     public string? BeforeKey { get; set; }
 }

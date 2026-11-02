@@ -50,26 +50,42 @@ namespace ChatApp.Server.Core;
 // [읽는 법] 멤버 한 명의 상태. EmployeeNo와 JoinedAt은 get만 있어 만든 뒤 바뀌지 않는다(사원번호는 키, 입장 시각은 기록 열람 기준). DisplayName과 LastReadAt은 set이 있어 이름 변경·읽음 위치 갱신 때 바뀐다. DateTime?의 ?는 "아직 읽은 적 없으면 null".
 public sealed class RoomMember(string employeeNo, string displayName, DateTime joinedAt, DateTime? lastReadAt)
 {
+    /// <summary>멤버의 사원번호 (멤버 구분 키, 만든 뒤 바뀌지 않는다).</summary>
     public string EmployeeNo { get; } = employeeNo;
+
+    /// <summary>멤버의 표시 이름 (이름이 바뀌면 갱신된다).</summary>
     public string DisplayName { get; set; } = displayName;
+
+    /// <summary>방에 들어온 시각 (만든 뒤 바뀌지 않는다).</summary>
     public DateTime JoinedAt { get; } = joinedAt;
+
+    /// <summary>마지막으로 읽은 위치의 시각. 아직 읽은 적이 없으면 null.</summary>
     public DateTime? LastReadAt { get; set; } = lastReadAt;
 
+    /// <summary>클라이언트에 보낼 전달용 <see cref="RoomMemberInfo"/>로 바꿔 돌려준다.</summary>
     public RoomMemberInfo ToInfo() => new()
     {
         EmployeeNo = EmployeeNo, DisplayName = DisplayName, JoinedAt = JoinedAt, LastReadAt = LastReadAt,
     };
 }
 
+/// <summary>채팅방 하나 (기본 방 "전체 채팅" 또는 단체방)의 서버 메모리 상태.</summary>
 public sealed class Room(int id, string name, string? ownerNo, string? ownerName, int maxUsers, bool isPrivate)
 {
+    /// <summary>방 번호 (기본 방은 <see cref="RoomInfo.LobbyId"/>).</summary>
     public int Id { get; } = id;
+
+    /// <summary>방 이름.</summary>
     public string Name { get; } = name;
 
     /// <summary>방장 (처음엔 만든 사람, 위임하면 바뀐다. 기본 방은 null). RoomManager의 lock 안에서만 바꾼다.</summary>
     // [개념] { get; internal set; } = 읽기는 누구나(public), 쓰기는 같은 프로젝트 안에서만(internal). 방장 변경은 RoomManager(lock 안)만 하게 해, 바깥에서 lock 없이 바꾸는 실수를 컴파일러가 막아 준다.
     public string? OwnerNo { get; internal set; } = ownerNo;
+
+    /// <summary>방장의 표시 이름 (기본 방은 null).</summary>
     public string? OwnerName { get; internal set; } = ownerName;
+
+    /// <summary>방 상단에 고정된 공지 내용. 공지가 없으면 빈 문자열.</summary>
     public string PinnedNotice { get; internal set; } = "";
 
     /// <summary>최대 인원 (0 = 제한 없음). 멤버 수 기준. 방장·관리자가 바꿀 수 있다(RoomManager의 lock 안에서만).</summary>
@@ -86,14 +102,18 @@ public sealed class Room(int id, string name, string? ownerNo, string? ownerName
     // [읽는 법] 지금 접속해서 이 방에 연결된 세션들의 집합. HashSet은 같은 세션이 두 번 들어가지 않고(중복 무시) 넣고 빼기가 빠르다. 실시간 방송은 이 집합을 순회해 보낸다(순회 전에 복사본을 떠서 보낸다).
     internal HashSet<ClientSession> Online { get; } = [];
 
+    /// <summary>기본 방("전체 채팅")이면 true.</summary>
     public bool IsLobby => Id == RoomInfo.LobbyId;
 
+    /// <summary>정원이 찼으면 true (기본 방과 MaxUsers가 0인 방은 항상 false, 멤버 수 기준).</summary>
     // [읽는 법] 정원이 찼는지: 기본 방이 아니고, 정원이 0보다 크고(0 = 제한 없음), 멤버 수가 정원 이상이면 true. "멤버 수" 기준이라 접속을 끊은 멤버도 자리를 차지한다.
     internal bool IsFull => !IsLobby && MaxUsers > 0 && Members.Count >= MaxUsers;
 
+    /// <summary>해당 사원번호가 이 방의 멤버이면 true (기본 방은 항상 true).</summary>
     // [읽는 법] 기본 방은 로그인한 모두가 멤버로 취급되어 항상 true, 단체방은 Members에 있어야 true. 권한 확인(메시지 보내기·파일 올리기·내려받기)이 모두 이 규칙을 쓴다.
     internal bool IsMember(string employeeNo) => IsLobby || Members.ContainsKey(employeeNo);
 
+    /// <summary>이 방의 정보(<see cref="RoomInfo"/>: 이름, 방장, 인원, 공지 등)를 클라이언트에 보낼 형태로 만든다.</summary>
     /// <param name="withMembers">true면 멤버 목록·읽음 위치를 함께 담는다 (입장 결과·방 변경 알림용).</param>
     internal RoomInfo ToInfo(bool withMembers = false) => new()
     {

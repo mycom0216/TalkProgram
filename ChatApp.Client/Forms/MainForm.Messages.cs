@@ -66,6 +66,7 @@ namespace ChatApp.Client.Forms;
 //   - "입력 중"이 안 사라진다 ............... 서버가 보낸 IsTyping=false 수신, ChatWindow.SetTypingIndicator의 시간 만료
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>메인 창(partial) - 읽음 표시, 공감, 삭제, 수정, 입력 중 표시 같은 메시지 부가 기능 부분.</summary>
 public sealed partial class MainForm
 {
     // ───────────────────────── 읽음 표시 (카카오톡의 노란 숫자) ─────────────────────────

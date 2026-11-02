@@ -50,10 +50,14 @@ internal sealed class ImageViewerForm : Form
     private Image? _image;
     private int _count;
 
+    /// <summary>이전/다음 사진으로 이동하려 할 때 발생한다. 인수는 이동하려는 사진 번호(0부터).</summary>
     // [읽는 법] 인수는 "이동하려는 사진 번호". 이 창은 번호만 알리고, 그 사진을 준비해서 ShowItem/ShowImage로 다시 알려 주는 일은 MainForm이 한다.
     public event Action<int>? NavigationRequested;
+
+    /// <summary>지금 보고 있는 사진 번호 (0부터).</summary>
     public int CurrentIndex { get; private set; }
 
+    /// <summary>사진 보기 창을 만든다 (최대화 상태로 열리고 좌우 방향키로 이동).</summary>
     public ImageViewerForm()
     {
         Text = "사진 보기";
@@ -82,6 +86,7 @@ internal sealed class ImageViewerForm : Form
         FormClosed += (_, _) => { _picture.Image = null; _image?.Dispose(); _image = null; };
     }
 
+    /// <summary>index번째 사진(전체 count장)의 제목을 표시하고 "불러오는 중" 상태로 바꾼다.</summary>
     // [읽는 법] Math.Clamp로 번호를 0~(개수-1) 범위에 맞춘다. 전달받은 개수가 바뀌었거나 번호가 틀려도 창이 죽지 않게 하는 방어다.
     public void ShowItem(int index, int count, string title)
     {
@@ -93,6 +98,7 @@ internal sealed class ImageViewerForm : Form
         ShowLoading();
     }
 
+    /// <summary>현재 사진을 지우고 캡션에 "불러오는 중…"을 표시한다.</summary>
     public void ShowLoading()
     {
         _picture.Image = null;
@@ -101,6 +107,7 @@ internal sealed class ImageViewerForm : Form
         _caption.Text = $"{_caption.Text.Split("  ·  ")[0]}  ·  불러오는 중…";
     }
 
+    /// <summary>path의 사진 파일을 읽어 화면에 보여 준다. 읽지 못하면 "사진을 표시할 수 없습니다."를 표시한다.</summary>
     public void ShowImage(string path)
     {
         try

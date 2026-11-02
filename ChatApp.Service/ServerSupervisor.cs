@@ -37,6 +37,7 @@ public sealed class ServerSupervisor(ILogger<ServerSupervisor> logger, ServerSup
     // [왜] 서비스 중지 중에 서버가 /quit으로 끝나면, 감시 루프가 이를 "비정상 종료"로 보고 다시 켜 버린다. 이 표시로 구분한다.
     private volatile bool _stopping;
 
+    /// <summary>서버 exe를 창 없이 실행하고 종료를 기다리다가, 예기치 않게 죽으면 간격을 늘려 가며 다시 시작하는 감시 루프. exe가 없으면 FileNotFoundException.</summary>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         string serverExe = _options.ServerExePath;
@@ -90,6 +91,7 @@ public sealed class ServerSupervisor(ILogger<ServerSupervisor> logger, ServerSup
         }
     }
 
+    /// <summary>서비스 중지: 서버에 "/quit"을 보내 QuitTimeout 안에 정상 종료되기를 기다리고, 안 끝나면 프로세스 트리째 강제 종료한다.</summary>
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         _stopping = true;

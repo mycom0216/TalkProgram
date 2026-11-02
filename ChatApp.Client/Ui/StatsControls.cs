@@ -52,6 +52,7 @@ namespace ChatApp.Client.Ui;
 /// <summary>공통: 더블 버퍼(깜빡임 방지) + DPI 크기 계산.</summary>
 internal abstract class StatsControlBase : Control
 {
+    /// <summary>깜빡임 없이 직접 그리도록 더블 버퍼링 등을 설정하고 배경을 흰색(Theme.Surface)으로 한다.</summary>
     protected StatsControlBase()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
@@ -63,12 +64,18 @@ internal abstract class StatsControlBase : Control
     // [읽는 법] 96dpi(100% 배율)를 기준으로 쓴 숫자를 지금 화면에 맞게 키운다. 예: 150% 배율(144dpi)에서 S(10) = 15. 모든 그리기 좌표가 이 함수를 거쳐서 배율이 달라도 비율이 같다.
     protected int S(int value) => (int)Math.Round(value * DeviceDpi / 96.0);
 
+    /// <summary>제목·설명 같은 작은 글자용 글꼴 (기본 글꼴의 0.85배). 처음 쓸 때 만들어 재사용한다.</summary>
     // [개념] ??= : 값이 null일 때만 만들어 넣는다(지연 생성). 처음 그릴 때 한 번 만들고 이후에는 재사용. 글꼴이 바뀌면(OnFontChanged) 모두 지워 다시 만든다. Dispose에서도 해제.
     protected Font SmallFont => _small ??= new Font(Font.FontFamily, Font.Size * 0.85f);
+
+    /// <summary>카드의 큰 숫자용 굵은 글꼴 (기본 글꼴의 1.9배). 처음 쓸 때 만들어 재사용한다.</summary>
     protected Font BigFont => _big ??= new Font(Font.FontFamily, Font.Size * 1.9f, FontStyle.Bold);
+
+    /// <summary>제목용 굵은 글꼴 (기본 글꼴과 같은 크기). 처음 쓸 때 만들어 재사용한다.</summary>
     protected Font BoldFont => _bold ??= new Font(Font.FontFamily, Font.Size, FontStyle.Bold);
     private Font? _small, _big, _bold;
 
+    /// <summary>글꼴이 바뀌면 그 글꼴로 만든 파생 글꼴(작게·크게·굵게)을 해제해 다음에 다시 만들게 한다.</summary>
     // [주의] 부모 글꼴이 바뀌면 이 컨트롤의 Font도 바뀐다. 파생 글꼴(작게/크게/굵게)은 Font 기준으로 만든 것이라 먼저 해제하고 base를 부른다.
     protected override void OnFontChanged(EventArgs e)
     {
@@ -76,6 +83,7 @@ internal abstract class StatsControlBase : Control
         base.OnFontChanged(e);
     }
 
+    /// <summary>컨트롤을 버릴 때 파생 글꼴을 해제한다.</summary>
     protected override void Dispose(bool disposing)
     {
         if (disposing) DisposeFonts();
@@ -103,12 +111,14 @@ internal sealed class StatCard : StatsControlBase
     private string _title = "", _value = "-", _detail = "";
     private Color _accent = Theme.Primary;
 
+    /// <summary>숫자 카드를 기본 크기(170×92)와 바깥 여백으로 만든다.</summary>
     public StatCard()
     {
         Size = new Size(170, 92);
         Margin = new Padding(6);
     }
 
+    /// <summary>카드의 제목, 큰 숫자, 설명을 바꾸고 다시 그린다. accent는 왼쪽 색 띠 색 (null이면 Theme.Primary).</summary>
     public void SetValue(string title, string value, string detail, Color? accent = null)
     {
         _title = title; _value = value; _detail = detail; _accent = accent ?? Theme.Primary;
@@ -117,6 +127,7 @@ internal sealed class StatCard : StatsControlBase
         Invalidate();
     }
 
+    /// <summary>카드 배경, 왼쪽 색 띠, 제목, 큰 숫자, 설명을 그린다.</summary>
     protected override void OnPaint(PaintEventArgs e)
     {
         Graphics g = e.Graphics;
@@ -144,12 +155,14 @@ internal sealed class BarChart : StatsControlBase
     private int _highlight = -1; // 강조할 막대 (오늘, 지금 시간)
     private int _hover = -1;
 
+    /// <summary>막대그래프를 기본 크기(360×220)와 바깥 여백으로 만든다.</summary>
     public BarChart()
     {
         Size = new Size(360, 220);
         Margin = new Padding(6);
     }
 
+    /// <summary>그래프 제목과 막대별 이름·값(두 배열은 길이가 같아야 함)을 바꾸고 다시 그린다. highlight는 강조할 막대 번호(-1이면 없음).</summary>
     public void SetData(string title, string[] labels, int[] values, int highlight = -1, string? emptyText = null)
     {
         _title = title; _labels = labels; _values = values; _highlight = highlight;
@@ -176,6 +189,7 @@ internal sealed class BarChart : StatsControlBase
         return new Rectangle(x, plot.Bottom - h, Math.Max(1, (int)slot - gap), h);
     }
 
+    /// <summary>마우스가 올라간 막대를 찾아 기억하고, 바뀌었으면 다시 그린다 (위쪽 줄에 그 막대의 이름·값이 보인다).</summary>
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -190,12 +204,14 @@ internal sealed class BarChart : StatsControlBase
         if (hit != _hover) { _hover = hit; Invalidate(); }
     }
 
+    /// <summary>마우스가 그래프 밖으로 나가면 막대 강조를 지운다.</summary>
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
         if (_hover != -1) { _hover = -1; Invalidate(); }
     }
 
+    /// <summary>카드 배경, 제목, 합계(또는 마우스를 올린 막대의 값), 기준선, 막대와 이름을 그린다. 자료가 없으면 안내 문구를 쓴다.</summary>
     protected override void OnPaint(PaintEventArgs e)
     {
         Graphics g = e.Graphics;
@@ -266,12 +282,14 @@ internal sealed class UsageBar : StatsControlBase
     private double _ratio; // 0~1
     private double _part;  // 막대 안에서 따로 표시할 부분 (예: 사내톡 파일), 0~1
 
+    /// <summary>사용량 막대를 기본 크기(300×110)와 바깥 여백으로 만든다.</summary>
     public UsageBar()
     {
         Size = new Size(300, 110);
         Margin = new Padding(6);
     }
 
+    /// <summary>제목, 사용 비율(usedRatio, 0~1), 그 안의 일부 비율(partRatio, 0~1), 설명 글을 바꾸고 다시 그린다.</summary>
     public void SetData(string title, double usedRatio, double partRatio, string detail)
     {
         // [읽는 법] 비율은 0~1로 자르고, 일부(_part)는 전체(_ratio)를 넘지 않게 자른다 → 서버 값이 이상해도 막대가 칸 밖으로 나가지 않는다.
@@ -280,6 +298,7 @@ internal sealed class UsageBar : StatsControlBase
         Invalidate();
     }
 
+    /// <summary>제목, 사용 비율(%), 막대(80% 넘으면 주황, 90% 넘으면 빨강), 설명 글을 그린다.</summary>
     protected override void OnPaint(PaintEventArgs e)
     {
         Graphics g = e.Graphics;

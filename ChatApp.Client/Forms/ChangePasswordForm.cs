@@ -55,6 +55,7 @@ namespace ChatApp.Client.Forms;
 //   - 변경에 성공한 뒤 메시지 상자를 한 번 더 띄운다(성공 알림). 강제 흐름에서는 곧바로 채팅 화면으로 넘어가므로 생략해도 되는 단계다.
 // ───────────────────────────────────────────────────────────────────────────
 
+/// <summary>비밀번호 변경 창. 일반 변경과 임시 비밀번호 로그인 뒤의 강제 변경에 모두 쓴다.</summary>
 public sealed class ChangePasswordForm : Form
 {
     private readonly ChatClient _client;

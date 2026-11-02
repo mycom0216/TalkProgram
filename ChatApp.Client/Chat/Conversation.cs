@@ -68,9 +68,13 @@ namespace ChatApp.Client.Chat;
 //   C# 12 문법. 생성자 매개변수를 클래스 전체에서 쓸 수 있고, 아래처럼 속성 초기값으로 바로 넘길 수 있다.
 internal sealed class Conversation(string key, string title)
 {
-    public string Key { get; } = key;          // "room:2", "dm:A0001"
+    /// <summary>대화를 구분하는 키. 방은 "room:2", 1:1은 "dm:A0001" 형태.</summary>
+    public string Key { get; } = key;
+
+    /// <summary>대화 제목(방 이름 또는 상대 이름).</summary>
     public string Title { get; set; } = title;
 
+    /// <summary>이 대화의 말풍선 목록 (시간 순서).</summary>
     // [개념] [] : C# 12 컬렉션 식. new List<ChatItem>()과 같다.
     public List<ChatItem> Items { get; } = [];
 
@@ -117,6 +121,7 @@ internal sealed class Conversation(string key, string title)
 
     /// <summary>읽음 숫자처럼 여러 말풍선의 표시가 한꺼번에 바뀌었을 때 (창은 다시 그리기만).</summary>
     public event Action? ReadStateChanged;
+    /// <summary>ReadStateChanged 이벤트를 발생시켜 열려 있는 창에 읽음 표시가 바뀌었음을 알린다.</summary>
     public void NotifyReadStateChanged() => ReadStateChanged?.Invoke();
 
     /// <summary>열려 있는 대화창이 이 이벤트로 새 말풍선을 받는다.</summary>
@@ -172,6 +177,7 @@ internal sealed class Conversation(string key, string title)
     /// <summary>파일 진행률·상태처럼 이미 있는 말풍선의 내용이 바뀌었을 때.</summary>
     public event Action<ChatItem>? ItemChanged;
 
+    /// <summary>ItemChanged 이벤트를 발생시켜 해당 말풍선을 창이 다시 그리게 한다.</summary>
     // [왜] 말풍선 크기는 그대로이고 내용(진행률 %)만 바뀌므로, 창은 전체를 다시 배치하지 않고 다시 그리기만 하면 된다.
     public void NotifyChanged(ChatItem item) => ItemChanged?.Invoke(item);
 
@@ -277,8 +283,11 @@ internal sealed class Conversation(string key, string title)
         : item.MessageId > 0 ? $"id:{item.MessageId}"
         : $"{item.SenderKey}|{item.Text}|{item.Time:yyyyMMddHHmmssfff}";
 
+    /// <summary>채팅방 번호로 대화 키("room:번호")를 만들어 돌려준다.</summary>
     // 대화를 사전(Dictionary)에 넣을 때 쓰는 키. 방은 "room:번호", 1:1은 "dm:상대 사원번호".
     // [왜] 방 번호 2와 사원번호 "2"가 섞이지 않도록 앞에 종류를 붙인다.
     public static string RoomKey(int roomId) => $"room:{roomId}";
+
+    /// <summary>상대 사원번호로 1:1 대화 키("dm:사원번호")를 만들어 돌려준다.</summary>
     public static string DirectKey(string employeeNo) => $"dm:{employeeNo}";
 }

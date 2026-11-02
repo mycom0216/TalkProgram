@@ -165,6 +165,7 @@ public sealed partial class MainForm : Form
     // [읽는 법] 화면 배율(DPI) 보정: 코드에 쓴 100은 "100%일 때의 픽셀"이고, 배율이 150%인 모니터에서는 150으로 바꿔 준다. 고정 픽셀을 그대로 쓰면 고해상도 화면에서 창이 작고 흐려진다.
     private int S(int v) => LogicalToDeviceUnits(v);
 
+    /// <summary>메인 창을 만든다. 로그인된 client와 사용자 설정(settings)을 받아 화면을 구성한다.</summary>
     public MainForm(ChatClient client, ClientSettings settings)
     {
         _client = client;
@@ -542,6 +543,7 @@ public sealed partial class MainForm : Form
     private string ConnectedStatusText() =>
         $"{(_client.IsEncrypted ? "암호화 연결됨" : "연결됨(암호화 안 됨)")} · {_client.Host}:{_client.Port}";
 
+    /// <summary>창이 닫힐 때 컨트롤 트리 밖의 메뉴·타이머·그림을 직접 해제한다.</summary>
     // [주의] 메뉴·타이머·메뉴 그림은 컨트롤 트리에 없어 창과 함께 해제되지 않는다.
     //        로그아웃 → 다시 로그인을 반복하면 그만큼 윈도우 핸들이 쌓이므로 직접 정리한다.
     protected override void Dispose(bool disposing)

@@ -180,6 +180,7 @@ internal sealed class ChatWindow : Form
 
     /// <summary>[전송] 또는 Enter: (이 창, 보낼 글, 답장할 메시지 번호 또는 null).</summary>
     public event Action<ChatWindow, string, long?>? SendRequested;
+    /// <summary>입력 중 상태가 바뀜: (이 창, 지금 입력 중인지). 글자를 바꾸면 true, 2초 동안 입력이 없거나 비우거나 보내면 false.</summary>
     public event Action<ChatWindow, bool>? TypingActivity;
 
     /// <summary>공감 누르기/취소: (이 창, 말풍선, 이모지).</summary>
@@ -187,6 +188,7 @@ internal sealed class ChatWindow : Form
 
     /// <summary>메시지 삭제 요청.</summary>
     public event Action<ChatWindow, ChatItem>? DeleteRequested;
+    /// <summary>메시지 수정 요청: (이 창, 수정할 말풍선).</summary>
     public event Action<ChatWindow, ChatItem>? EditRequested;
 
     /// <summary>[초대] 클릭 (채팅방만).</summary>
@@ -209,6 +211,7 @@ internal sealed class ChatWindow : Form
 
     /// <summary>파일 말풍선 열기/저장/폴더 보기.</summary>
     public event Action<ChatWindow, ChatItem, FileCommand>? FileCommandRequested;
+    /// <summary>방 파일 모아보기 요청 (이 창).</summary>
     public event Action<ChatWindow>? RoomFilesRequested;
     /// <summary>말풍선 옆 프로필 사진을 누름 (사원번호) → 메인 창이 프로필 카드를 연다.</summary>
     public event Action<string>? ProfileRequested;
@@ -614,6 +617,7 @@ internal sealed class ChatWindow : Form
         _header.Invalidate(); // [개념] Invalidate: "다시 그려 달라" 요청 → 곧 PaintHeader가 새 값으로 실행된다.
     }
 
+    /// <summary>머리 아래 고정 공지 줄을 바꾼다. text가 null이거나 비어 있으면 줄을 숨긴다.</summary>
     public void SetPinnedNotice(string? text)
     {
         string value = text?.Trim() ?? "";
@@ -621,6 +625,7 @@ internal sealed class ChatWindow : Form
         _pinnedNotice.Visible = value.Length > 0;
     }
 
+    /// <summary>상대의 "입력 중..." 표시를 켜거나(isTyping=true, 4초간 유효) 끈다.</summary>
     public void SetTypingIndicator(string employeeNo, string displayName, bool isTyping)
     {
         // [읽는 법] 상대가 입력 중이라는 신호를 받으면 "4초 뒤까지 유효"로 기록한다. 4초 안에 새 신호가 오면 연장되고, 안 오면 RefreshTypingLabel이 지운다. "멈춤" 신호가 네트워크에서 유실돼도 표시가 영원히 남지 않게 하는 만료 장치.
@@ -674,6 +679,7 @@ internal sealed class ChatWindow : Form
     }
     private ContextMenuStrip? _headerMenu;
 
+    /// <summary>방 파일함 열기를 요청한다 (RoomFilesRequested 이벤트로 메인 창에 알림).</summary>
     public void RequestRoomFiles() => RoomFilesRequested?.Invoke(this);
 
     /// <summary>[방 삭제] 버튼 표시 여부 (방장·관리자만).</summary>
@@ -806,6 +812,7 @@ internal sealed class ChatWindow : Form
         _showWithoutActivation = false;
     }
 
+    /// <summary>true를 돌려주는 동안 Show()하면 창이 활성화(포커스 획득) 없이 나타난다. ShowInactive가 잠깐 켠다.</summary>
     // [개념] override: 부모(Form)의 가상 속성을 다시 정의. 윈도우가 창을 띄울 때 이 값을 물어본다.
     protected override bool ShowWithoutActivation => _showWithoutActivation;
 
@@ -1094,6 +1101,7 @@ internal sealed class ChatWindow : Form
         _input.Focus();
     }
 
+    /// <summary>창이 닫힐 때 컨트롤 트리 밖의 툴팁·타이머·메뉴를 직접 해제한다.</summary>
     // [주의] 메뉴(ContextMenuStrip)와 툴팁은 컨트롤 트리에 들어 있지 않아 창이 닫혀도 자동으로 해제되지 않는다.
     //        창을 열고 닫을 때마다 윈도우 핸들(USER/GDI 객체)이 쌓이지 않게 직접 정리한다.
     protected override void Dispose(bool disposing)

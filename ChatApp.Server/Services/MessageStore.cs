@@ -93,16 +93,19 @@ namespace ChatApp.Server.Services;
 // [개념] IDisposable: "다 쓰면 정리(Dispose)해야 하는 자원을 가진 객체"라는 표시. 여기서는 스레드 종료·남은 저장 마무리.
 public sealed class MessageStore : IDisposable
 {
+    /// <summary>DB 작업 스레드의 큐에 넣는 작업의 공통 부모 (저장·지난 대화 불러오기·기타 DB 작업).</summary>
     // 큐에 넣는 작업 종류 (record = 값만 담는 간단한 클래스)
     // [개념] abstract record + 상속 record: "작업"이라는 공통 부모 아래 저장 작업 / 불러오기 작업 두 종류를 둔다.
     //   한 큐에 서로 다른 종류의 작업을 넣고, 꺼낼 때 is 패턴(job is SaveJob save)으로 종류를 구분한다.
     // [개념] record SaveJob(StoredMessage Message): 괄호 안이 곧 속성 목록인 "위치 레코드". 생성자·속성·비교가 자동으로 만들어진다.
     private abstract record Job;
+
+    /// <summary>메시지 하나를 DB에 저장하는 작업.</summary>
     private sealed record SaveJob(StoredMessage Message) : Job;
-    // Before = 요청한 시각. 이 시각 "이전" 메시지만 기록으로 보낸다. 이후 메시지는 실시간 패킷으로 받으므로 중복을 줄인다.
-    // Since = 이 시각 이전 메시지는 주지 않는다(나중에 들어온 방 멤버는 들어오기 전 대화를 보지 못한다).
+
+    /// <summary>지난 대화를 불러와 요청한 세션에 보내는 작업 (Before 이전 메시지만 보내고, Since가 있으면 그 이전 메시지는 제외한다).</summary>
     private sealed record HistoryJob(ClientSession Session, int? RoomId, string? Me, string? Peer, DateTime Before, DateTime? Since = null, string? BeforeKey = null) : Job;
-    // 그 밖의 DB 작업(읽음 위치 저장, 삭제 표시, 공감 등). 같은 큐에서 순서대로 처리되므로 "저장 → 삭제" 순서가 뒤바뀌지 않는다.
+    /// <summary>그 밖의 DB 작업(읽음 위치 저장, 삭제 표시, 공감 등). 같은 큐에서 순서대로 처리되므로 "저장 → 삭제" 순서가 뒤바뀌지 않는다.</summary>
     private sealed record ActionJob(string Name, Action Work) : Job;
 
     // [개념] const: 컴파일할 때 값이 박히는 상수. 바뀌지 않는 설정값에 쓴다.
@@ -121,7 +124,6 @@ public sealed class MessageStore : IDisposable
     private readonly ServerLogger _log;
     private readonly Thread _thread;
 
-    /// <param name="loadThumbnail">파일 저장 경로 → 미리보기 바이트 (FileService.ReadThumbnail)</param>
     // ── 메시지 번호 발급 ──
     // [왜] 메시지 번호(MessageId)는 "보내는 순간" 필요하다(받는 사람이 그 번호로 답장·삭제·공감을 한다).
     //      DB의 AUTO_INCREMENT는 저장한 뒤에야 알 수 있는데 저장은 이 스레드가 나중에 하므로, 서버가 직접 발급한다.
@@ -168,12 +170,17 @@ public sealed class MessageStore : IDisposable
         if (_recent.TryGetValue(messageId, out MessageMeta? meta)) _recent[messageId] = meta with { Deleted = true };
     }
 
+    /// <summary>기억해 둔 메시지의 내용을 수정본으로 바꾸고 수정됨으로 표시한다 (기억하지 않는 메시지면 아무 일도 없다).</summary>
     public void UpdateContent(long messageId, string content)
     {
         if (_recent.TryGetValue(messageId, out MessageMeta? meta))
             _recent[messageId] = meta with { Content = content, Edited = true };
     }
 
+    /// <summary>DB의 마지막 메시지 번호를 읽어 번호 발급을 이어 가고, DB 작업 스레드(DbWriter)를 시작한다.</summary>
+    /// <param name="repository">대화를 저장·조회하는 DB 접근 객체.</param>
+    /// <param name="loadThumbnail">파일 저장 경로 → 미리보기 바이트 (FileService.ReadThumbnail)</param>
+    /// <param name="log">서버 로거.</param>
     public MessageStore(MessageRepository repository, Func<string, byte[]?> loadThumbnail, ServerLogger log)
     {
         _repository = repository;
