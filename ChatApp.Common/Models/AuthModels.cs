@@ -17,11 +17,17 @@ namespace ChatApp.Common.Models;
 //   화면(클라이언트)의 검사는 "편의"일 뿐 보안 검사가 아니다.
 public sealed class RegisterRequest
 {
-    public string EmployeeNo { get; set; } = "";  // 사원번호 = 로그인 아이디
+    /// <summary>사원번호(로그인 아이디).</summary>
+    public string EmployeeNo { get; set; } = "";
+    /// <summary>이메일 주소. 서버가 허용된 도메인(ServerInfo.AllowedEmailDomains)인지 검사한다.</summary>
     public string Email { get; set; } = "";
+    /// <summary>이름.</summary>
     public string Name { get; set; } = "";
-    public string Department { get; set; } = "";  // 부서 (접속자 목록을 부서별로 묶는 데 사용)
-    public string Position { get; set; } = "";    // 직급 (표시 이름 "홍길동 대리")
+    /// <summary>부서 (접속자 목록을 부서별로 묶는 데 사용).</summary>
+    public string Department { get; set; } = "";
+    /// <summary>직급 (표시 이름 "홍길동 대리"의 뒷부분).</summary>
+    public string Position { get; set; } = "";
+    /// <summary>비밀번호 원문. 서버가 해시로 바꿔 저장한다.</summary>
     // [주의] 비밀번호는 패킷 안에서는 원문이다. 네트워크 구간은 TLS가 암호화하고(TlsHelper),
     //   서버는 그대로 저장하지 않고 해시(PasswordHasher)로 바꿔 저장한다.
     public string Password { get; set; } = "";
@@ -38,8 +44,11 @@ public sealed class RegisterRequest
 /// <summary>로그인 요청 (클라이언트 → 서버, Packet.Data).</summary>
 public sealed class LoginRequest
 {
+    /// <summary>로그인할 사원번호.</summary>
     public string EmployeeNo { get; set; } = "";
+    /// <summary>비밀번호 원문. 서버가 저장된 해시와 비교한다.</summary>
     public string Password { get; set; } = "";
+    /// <summary>이 PC(설치본)를 구분하는 ID(32자리 16진수). 서버가 기기별 자동 로그인 토큰을 발급하는 데 쓴다.</summary>
     public string DeviceId { get; set; } = "";
 
     /// <summary>클라이언트의 프로토콜 버전 (RegisterRequest와 같은 이유로 기본값 0).</summary>
@@ -49,9 +58,13 @@ public sealed class LoginRequest
 /// <summary>비밀번호 대신 서버 발급 토큰으로 로그인한다.</summary>
 public sealed class TokenLoginRequest
 {
+    /// <summary>로그인할 사원번호.</summary>
     public string EmployeeNo { get; set; } = "";
+    /// <summary>서버가 발급한 로그인 토큰(비밀번호 대신 사용).</summary>
     public string Token { get; set; } = "";
+    /// <summary>토큰을 발급받은 PC(설치본)를 구분하는 ID(32자리 16진수).</summary>
     public string DeviceId { get; set; } = "";
+    /// <summary>클라이언트의 프로토콜 버전 (RegisterRequest와 같은 이유로 기본값 0).</summary>
     public int ProtocolVersion { get; set; }
 }
 
@@ -63,9 +76,13 @@ public sealed class TokenLoginRequest
 //   아예 없으면 실수로 유출될 일이 없다.
 public sealed class UserInfo
 {
+    /// <summary>사원번호(로그인 아이디).</summary>
     public string EmployeeNo { get; set; } = "";
+    /// <summary>이름.</summary>
     public string Name { get; set; } = "";
+    /// <summary>부서.</summary>
     public string Department { get; set; } = "";
+    /// <summary>직급.</summary>
     public string Position { get; set; } = "";
     /// <summary>USER 또는 ADMIN. 클라이언트는 ADMIN일 때만 관리자 메뉴를 보여 준다(실제 권한 확인은 서버가 매번 한다).</summary>
     public string Role { get; set; } = "USER";
@@ -76,6 +93,7 @@ public sealed class UserInfo
     /// </summary>
     public bool MustChangePassword { get; set; }
 
+    /// <summary>Role이 "ADMIN"인지. JSON으로는 보내지 않고 Role로 계산한다.</summary>
     [JsonIgnore]
     public bool IsAdmin => Role == "ADMIN";
 

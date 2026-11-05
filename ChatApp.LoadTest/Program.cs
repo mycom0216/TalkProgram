@@ -42,7 +42,7 @@ Say($"부하 테스트: {host}:{port} ({(useTls ? "TLS" : "평문")}), 가상 �
 Say($"  예상 전송 {userCount * 1000.0 / intervalMs:N0}개/초 → 서버가 전달할 패킷 {userCount * userCount * 1000.0 / intervalMs:N0}개/초 (모두 같은 방)");
 
 // ── 1. 계정 준비 (없으면 가입) ──
-// [왜] 가입은 비밀번호 해시(PBKDF2 10만 번) 때문에 서버 CPU를 많이 쓴다. 동시에 8개씩만 보낸다.
+// [왜] 가입은 비밀번호 해시(PBKDF2 60만 번) 때문에 서버 CPU를 많이 쓴다. 동시에 8개씩만 보낸다.
 var sw = Stopwatch.StartNew();
 int created = 0;
 await Parallel.ForEachAsync(Enumerable.Range(1, userCount), new ParallelOptions { MaxDegreeOfParallelism = 8 }, async (i, _) =>

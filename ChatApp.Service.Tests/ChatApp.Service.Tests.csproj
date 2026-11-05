@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ChatApp.Service(서버를 감시하는 Windows 서비스 호스트) 테스트 (xUnit). 실행: dotnet test ChatApp.Service.Tests
+    진짜 서버와 DB 없이, 임시 폴더에 만든 가짜 서버(.cmd)로 "죽으면 다시 켠다 / 중지하면 /quit / 안 끝나면 강제 종료"를 확인한다.
+    ChatApp.Service가 net10.0-windows라서 이 프로젝트도 windows다(GitHub Actions의 windows-latest에서 돈다).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ChatApp.Service\ChatApp.Service.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

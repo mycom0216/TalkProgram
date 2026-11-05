@@ -19,16 +19,23 @@ public sealed class RoomInfo
     // [개념] const: 컴파일할 때 값이 박히는 상수. 서버와 클라이언트가 같은 값(1)을 쓰도록 Common에 둔다.
     public const int LobbyId = 1;
 
-    public int RoomId { get; set; }          // DB(rooms 테이블)의 AUTO_INCREMENT 번호
+    /// <summary>방 번호 (DB rooms 테이블의 AUTO_INCREMENT 번호).</summary>
+    public int RoomId { get; set; }
+    /// <summary>방 이름.</summary>
     public string Name { get; set; } = "";
-    public string? OwnerNo { get; set; }     // 방장 사원번호 (기본 방은 null)
-    public string? OwnerName { get; set; }   // 방장 표시 이름
+    /// <summary>방장 사원번호 (기본 방은 null).</summary>
+    public string? OwnerNo { get; set; }
+    /// <summary>방장 표시 이름.</summary>
+    public string? OwnerName { get; set; }
+    /// <summary>방 상단에 고정된 공지. 빈 문자열이면 공지 없음.</summary>
     public string PinnedNotice { get; set; } = "";
 
     /// <summary>최대 인원. 0이면 제한 없음(기본 방).</summary>
     public int MaxUsers { get; set; }
-    public int MemberCount { get; set; }     // 멤버 수 (접속하지 않은 멤버 포함). 기본 방은 지금 접속한 사람 수
-    public int OnlineCount { get; set; }     // 지금 접속 중인 멤버 수
+    /// <summary>멤버 수 (접속하지 않은 멤버 포함). 기본 방은 지금 접속한 사람 수.</summary>
+    public int MemberCount { get; set; }
+    /// <summary>지금 접속 중인 멤버 수.</summary>
+    public int OnlineCount { get; set; }
 
     /// <summary>true = 비공개 방. 목록에는 멤버에게만 보이고, 초대로만 들어갈 수 있다.</summary>
     public bool IsPrivate { get; set; }
@@ -36,6 +43,7 @@ public sealed class RoomInfo
     /// <summary>멤버 목록과 읽음 위치. 입장 결과(RoomRes)·방 변경(RoomUpdate)에만 담고, 방 목록 방송에는 넣지 않는다(크기 절약).</summary>
     public List<RoomMemberInfo>? Members { get; set; }
 
+    /// <summary>기본 방("전체 채팅")인지.</summary>
     // [개념] [JsonIgnore] + 계산 속성: RoomId만 있으면 알 수 있는 값이라 JSON으로 보내지 않는다.
     [JsonIgnore]
     public bool IsLobby => RoomId == LobbyId;
@@ -49,8 +57,11 @@ public sealed class RoomInfo
 /// <summary>채팅방 상단에 고정할 공지. 빈 글이면 기존 공지를 지운다.</summary>
 public sealed class RoomNoticeRequest
 {
+    /// <summary>공지를 고정할 방 번호.</summary>
     public int RoomId { get; set; }
+    /// <summary>공지 내용. 빈 글이면 기존 공지를 지운다.</summary>
     public string Text { get; set; } = "";
+    /// <summary>공지 최대 글자 수(200).</summary>
     public const int MaxLength = 200;
 }
 
@@ -59,15 +70,20 @@ public sealed class RoomNoticeRequest
 //   항상 같은 기준을 쓴다. 한 곳만 고치면 양쪽이 같이 바뀐다.
 public sealed class CreateRoomRequest
 {
+    /// <summary>방 최소 정원(2명).</summary>
     public const int MinUsers = 2;
+    /// <summary>방 최대 정원의 상한(1000명).</summary>
     // [주의] 1000명이라 DB 컬럼 rooms.max_users를 SMALLINT(최대 65535)로 바꿨다. TINYINT(최대 255)면
     //   "Out of range value" DB 오류가 났었다.
     public const int MaxUsersLimit = 1000;
     /// <summary>방을 만들 때 기본 정원 = 최대 정원. 작은 방이 필요하면 만들 때나 [방 정원 바꾸기]로 줄인다.</summary>
     public const int DefaultMaxUsers = MaxUsersLimit;
+    /// <summary>방 이름 최대 글자 수(30).</summary>
     public const int MaxNameLength = 30;
 
+    /// <summary>만들 방 이름.</summary>
     public string Name { get; set; } = "";
+    /// <summary>방 최대 정원(기본값은 DefaultMaxUsers).</summary>
     public int MaxUsers { get; set; } = DefaultMaxUsers;
 
     /// <summary>true = 비공개 방 (초대한 사람만 들어올 수 있음).</summary>
@@ -80,8 +96,10 @@ public sealed class CreateRoomRequest
 /// <summary>방 멤버 한 명 (RoomRes·RoomUpdate의 RoomInfo.Members). 읽음 표시 계산에 쓴다.</summary>
 public sealed class RoomMemberInfo
 {
+    /// <summary>멤버 사원번호.</summary>
     public string EmployeeNo { get; set; } = "";
-    public string DisplayName { get; set; } = "";   // "홍길동 대리"
+    /// <summary>멤버 표시 이름. 예: "홍길동 대리"</summary>
+    public string DisplayName { get; set; } = "";
 
     /// <summary>이 사람이 이 방에서 마지막으로 읽은 메시지 시각. 아직 읽은 적 없으면 null.</summary>
     public DateTime? LastReadAt { get; set; }
@@ -93,8 +111,11 @@ public sealed class RoomMemberInfo
 /// <summary>방 초대 (RoomInvite의 Data). 방 멤버만 초대할 수 있다.</summary>
 public sealed class RoomInviteRequest
 {
+    /// <summary>초대 요청 한 번에 담을 수 있는 최대 인원(50명).</summary>
     public const int MaxPerRequest = 50;
 
+    /// <summary>초대할 방 번호.</summary>
     public int RoomId { get; set; }
+    /// <summary>초대할 사람들의 사원번호 목록.</summary>
     public List<string> EmployeeNos { get; set; } = [];
 }

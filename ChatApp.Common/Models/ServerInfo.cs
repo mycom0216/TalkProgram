@@ -32,6 +32,7 @@ public sealed class ServerInfo
 
     /// <summary>서버의 프로토콜 버전과, 서버가 받아 주는 가장 낮은 클라이언트 버전 (ProtocolInfo 참고).</summary>
     public int ProtocolVersion { get; set; }
+    /// <summary>서버가 받아 주는 가장 낮은 클라이언트 프로토콜 버전(ProtocolInfo.MinSupported). 이보다 낮은 클라이언트는 업데이트해야 한다.</summary>
     public int MinProtocolVersion { get; set; }
 
     /// <summary>관리자가 배포한 최신 클라이언트 버전(예: "1.3.0"). 비어 있으면 업데이트 안내를 하지 않는다.</summary>

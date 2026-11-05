@@ -3,7 +3,7 @@
 C# / .NET 10 TCP 소켓 기반 1:N 사내 메신저. 서버는 접속자마다 수신·송신 스레드를 따로 두어 동시 채팅을 처리한다.
 WinForms 클라이언트, MariaDB, TLS 암호화, 파일 전송(최대 3GB), 관리자 기능·감사 로그를 갖췄다.
 
-[![Build](https://github.com/mycom0216/ChatApp/actions/workflows/dotnet-desktop.yml/badge.svg)](https://github.com/mycom0216/ChatApp/actions/workflows/dotnet-desktop.yml)
+[![Build](https://github.com/mycom0216/TalkProgram/actions/workflows/dotnet-desktop.yml/badge.svg)](https://github.com/mycom0216/TalkProgram/actions/workflows/dotnet-desktop.yml)
 
 ## 팀
 
@@ -12,6 +12,11 @@ WinForms 클라이언트, MariaDB, TLS 암호화, 파일 전송(최대 3GB), 관
 | 팀명 | 다같이채팅 |
 | 팀장 | 박은정 |
 | 팀원 | 반재영, 장선화 |
+
+## 기획 자료
+
+- [브레인스토밍](docs/브레인스토밍.md) — 구현 기능과 향후 제안을 구분해 정리
+- [유스케이스](docs/유스케이스.md) — 액터별 유스케이스 다이어그램과 기본·대안 흐름
 
 ## 구조
 
@@ -22,11 +27,18 @@ ChatApp.slnx
 ├─ ChatApp.Client/         WinForms 클라이언트 "사내톡" (로그인, 친구 목록 창, 1:1·채팅방 대화창)
 ├─ ChatApp.ConsoleClient/  검증용 콘솔 클라이언트
 ├─ ChatApp.LoadTest/       부하 테스트 도구 (가상 사용자 N명)
+├─ ChatApp.Service/        서버를 Windows 서비스로 돌리는 감독 프로그램 (죽으면 다시 켬)
+├─ ChatApp.Rag/            AI 비서의 RAG 엔진 (청킹, BM25+벡터 하이브리드 검색, 권한 필터, 로컬 LLM 답변·출처 인용). 외부 NuGet 없음
+├─ ChatApp.Rag.Eval/       RAG 검색 품질 평가 도구 (Recall@k, MRR, 권한 누출 0건 검사, 거절 기준 잡기)
 ├─ ChatApp.Tests/          단위·통합 테스트 (xUnit, DB 없이 실행)
+├─ ChatApp.Service.Tests/  서비스 감독 테스트 (xUnit, 가짜 서버 사용, Windows 전용)
 ├─ db/                     DB 스키마와 마이그레이션 스크립트
-├─ docs/ARCHITECTURE.md    아키텍처 문서 (구성도·스레드·프로토콜·DB·보안)
-├─ docs/SERVICE.md         서버 운영 가이드 (Windows 서비스 등록·업데이트·문제 해결)
-└─ docs/TESTING.md         테스트 결과서
+├─ docs/브레인스토밍.md    프로젝트 아이디어와 우선순위 제안
+├─ docs/유스케이스.md      사용자 관점 유스케이스와 흐름
+├─ docs/사내톡_아키텍처문서.pdf    아키텍처 문서
+├─ docs/사내톡_서버운영가이드.pdf  서버 운영 가이드
+├─ docs/시연_시나리오.md          주요 기능 시연 순서
+└─ docs/screenshots/              기능별 화면
 ```
 
 스레드 구성(서버):
@@ -45,20 +57,20 @@ ChatApp.slnx
 
 ## 처음 준비 (MariaDB)
 
-1. MariaDB에 root로 접속해 `C:\Users\LMS\Downloads\ChatApp\ChatApp\db\schema.sql` 전체를 실행한다. (파일 안의 `여기에_DB_비밀번호`를 먼저 바꾼다)
+1. MariaDB에 root로 접속해 `db\schema.sql` 전체를 실행한다. (파일 안의 `여기에_DB_비밀번호`를 먼저 바꾼다)
 2. `ChatApp.Server/appsettings.example.json`을 복사해 같은 폴더에 `appsettings.json`을 만든다.
 3. `appsettings.json`의 `ConnectionString` 비밀번호와 `AllowedEmailDomains`(가입 허용 이메일 도메인 목록, ["*"]면 제한 없음)을 수정한다.
    - `appsettings.json`은 `.gitignore`에 있어 GitHub에 올라가지 않는다.
-4. 이미 DB를 만들었다면 추가 스크립트를 순서대로 한 번씩 실행한다. cmd 어느 폴더에서 실행해도 된다.
+4. 이미 DB를 만들었다면 저장소 루트 폴더에서 추가 스크립트를 번호 순서대로 한 번씩 실행한다. 명령어는 저장소 루트 폴더에서 실행한다.
 
 ```
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_002_files.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_003_status.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_004_admin.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_005_rooms_messages.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_011_friends.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_012_profile_photo.sql"
-"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "C:\Users\LMS\Downloads\ChatApp\ChatApp\db\migrate_013_profile_background.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_002_files.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_003_status.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_004_admin.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_005_rooms_messages.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_011_friends.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_012_profile_photo.sql"
+"C:\Program Files\MariaDB 13.0\bin\mysql.exe" -u root -p chatapp < "db\migrate_013_profile_background.sql"
 ```
 
    - 002 = 파일 전송, 003 = 상태 메시지, 004 = 관리자 기능, 005 = 영구·비공개 방, 답장·공감·삭제, 읽음 표시, 검색 인덱스. 이미 실행한 것을 다시 실행해도 문제없다(IF NOT EXISTS).
@@ -106,6 +118,43 @@ ChatApp.slnx
 감사 로그(`audit_logs`)에 남는 기록: 로그인 성공·실패(IP 포함), 로그아웃, 회원가입, 비밀번호 변경, 파일 보냄·받음, 방 생성, 공지, 모든 관리 동작.
 기록은 전용 `AuditWriter` 스레드가 묶어서 저장하므로, DB가 잠깐 느려져도 로그인·채팅이 같이 느려지지 않는다.
 
+## AI 비서 (로컬 LLM + RAG)
+
+"지난주 배포 일정이 어떻게 정해졌지?"처럼 한국어로 물으면, 서버 PC의 **로컬 LLM(Ollama)** 이 대화 기록에서 근거를 찾아 출처와 함께 답한다.
+대화는 서버 밖으로 나가지 않고, **질문한 사람이 볼 수 있는 대화(멤버인 방 + 본인이 낀 1:1)만** 근거로 쓴다. 기본은 꺼짐이다.
+
+켜는 방법:
+
+1. 서버 PC에 [Ollama](https://ollama.com)를 설치하고 모델을 받는다: `ollama pull embeddinggemma`, 답변용 모델(예: `kanana2:3b`, 설치된 이름과 `ChatModel`이 같아야 함)
+2. `appsettings.json`의 `Ai.Enabled`를 `true`로 한다 (나머지 값은 `appsettings.example.json` 참고). 기본은 **CPU 전용**(`UseGpu: false`)이다.
+3. 서버를 다시 켜고, 클라이언트에서 내 이름 메뉴 → **AI 비서 (대화 기록에 질문)...** 을 연다.
+
+구조 (모두 `ChatApp.Rag`, 외부 패키지 없음):
+
+```
+질문 → [권한 필터: 볼 수 있는 대화만] → BM25(한국어 글자 bigram) + 벡터(embeddinggemma) → RRF로 합치기
+     → (근거에 답이 있는지 LLM 검증) → 근거만 보고 답하는 프롬프트 → 답변 + 출처 번호 검증 → 클라이언트
+```
+
+- **권한 필터는 순위를 매기기 전에 적용**한다. 못 보는 대화는 후보·점수·프롬프트·출처 어디에도 들어오지 않는다(테스트와 평가 도구로 누출 0건 확인).
+- 대화는 시간상 이어진 몇 줄씩 묶어(청킹) 색인한다. 임베딩은 내용 해시로 캐시해서, 대화가 늘어도 새 청크만 계산한다.
+- 질문은 한 번에 하나씩 처리하고(CPU 보호), 사람당 10초 간격·대기열 3개로 제한한다. 수신 스레드는 붙잡지 않는다.
+- 삭제한 메시지와 시스템 알림은 색인하지 않는다.
+
+평가 (`dotnet run --project ChatApp.Rag.Eval -c Release -- --answers`, Ollama 필요). 가상 대화 32줄·질문 27개짜리라 **벤치마크가 아니라 점검용**이다.
+측정 환경: Ryzen 7 3700X, RAM 16GB, GPU 미사용, embeddinggemma + kanana2:3b(Q4).
+
+| 항목 | 결과 |
+| --- | --- |
+| 검색 Recall@3 (BM25 / 벡터 / 하이브리드) | 모두 100% (청크 29개 조건에서 Recall@1은 85% / 90% / 90%) |
+| 못 보는 방의 내용이 검색 결과에 섞인 횟수 | 0 (대조군: 권한을 주면 정답이 나옴 3/3) |
+| 답변 정답 (답 있는 질문 20개) | 16/20 |
+| 답 없는/못 보는 질문 7개 중 올바른 거절 | 5/7 (근거 검증 단계를 끄면 4/7) |
+| 질문당 시간 (CPU) | 약 2.4초 (검증 단계 켜면 약 3.7초) |
+
+솔직한 한계: ① 3B 모델은 근거가 맞게 검색돼도 엉뚱한 줄을 인용하거나 답이 없는 질문에 "아직 정해지지 않았습니다"처럼 지어내기도 한다(위 표의 오답 4건, 지어낸 답 2건). 반드시 답 아래 **근거 대화를 확인**하도록 화면에 안내한다.
+② 근거 검증 단계의 개선 폭(거절 4/7 → 5/7)은 표본이 작아 우연과 구분되지 않는다. ③ 방 대화는 "입장한 시각 이후만" 규칙을 아직 적용하지 않는다(전체 대화 검색과 같은 한계). 자세한 설계·실험 기록은 [docs/AI비서_설계와_평가.md](docs/AI비서_설계와_평가.md).
+
 ## 실행
 
 Visual Studio 2026에서 `ChatApp.slnx` 열기 → 솔루션 속성 → 여러 시작 프로젝트로 Server와 Client 지정.
@@ -134,11 +183,12 @@ dotnet run --project ChatApp.ConsoleClient       # 창을 2~3개 띄워서 테�
 
 ```bash
 dotnet test ChatApp.Tests      # 또는 Visual Studio: 테스트 → 모든 테스트 실행
+dotnet test ChatApp.Service.Tests   # 서비스 감독 (Windows 전용)
 ```
 
-- 단위·통합 테스트 82개를 돈다. 패킷 직렬화, 패킷 경계(TCP 분할 수신), 파일 이름 정리, 비밀번호 해시, 설정 파일, TLS 지문 고정, 실제 서버에 소켓 접속하는 테스트가 들어 있다.
+- 패킷 직렬화, 패킷 경계(TCP 분할 수신), 파일 이름 정리, 비밀번호 해시, 설정 파일, TLS 지문 고정, 실제 서버에 소켓 접속 등을 확인하는 단위·통합 테스트를 실행한다.
 - DB 없이 돌아서 GitHub Actions가 푸시마다 자동으로 실행한다(위 Build 배지).
-- DB가 필요한 로그인·관리자 흐름은 실제 MariaDB로 시나리오 테스트를 했다. 결과와 화면 점검표는 [docs/TESTING.md](docs/TESTING.md)에 있다.
+- DB가 필요한 로그인·관리자 흐름은 실제 MariaDB로 시나리오 테스트를 했다. 주요 기능 시연 순서는 [docs/시연_시나리오.md](docs/시연_시나리오.md)에서 확인할 수 있다.
 
 ## 부하 테스트 (ChatApp.LoadTest)
 
@@ -160,6 +210,8 @@ dotnet run --project ChatApp.LoadTest -c Release -- 127.0.0.1 9000 300 20 2000  
 | 300명 | 148개/초 | 42,177개/초 | 0 | 0 | 129ms / 515ms | 178MB | 15.4초 |
 | 500명 | 99개/초 | 46,771개/초 | 0 | 0 | 276ms / 867ms | 287MB | 31.9초 |
 | 300명 **TLS** | 149개/초 | 43,202개/초 | 0 | 0 | 178ms / 567ms | 232MB | 18.8초 |
+
+참고: 위 표는 비밀번호 해시(PBKDF2)가 10만 회일 때 잰 값이다. 지금은 60만 회(OWASP 권장)라서 로그인 한 번의 계산이 약 6배(약 11ms → 64ms, .NET 10 기준) 길어졌다. 메시지 전달 지연에는 영향이 없고, 많은 사용자가 한꺼번에 로그인할 때의 "로그인 전체" 시간만 늘어난다. 옛 해시는 로그인할 때 자동으로 새 방식으로 바뀐다.
 
 TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리가 178MB에서 232MB로 늘었다. 테스트 도구 300명분의 암호화도 같은 2코어에서 돌아간 결과라서, 실제 서버에서는 차이가 더 작다.
 
@@ -192,8 +244,8 @@ TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리�
 - [x] 비밀번호 변경 (내 이름 메뉴)
 - [x] 프로필 사진·배경 사진: 프로필 카드(내 사진 클릭, 동료 오른쪽 클릭, 말풍선 옆 사진 클릭)에서 보기·바꾸기·지우기, 목록·말풍선·대화창·알림 창에 사진 표시, 바뀐 것만 받아 PC에 캐시
 - [x] 친구: 아이디(사원번호)·휴대폰 번호로 찾아 추가(한쪽 방향), 접속하지 않은 친구도 목록에 표시, 오른쪽 클릭으로 추가·삭제. 휴대폰 번호는 공개하지 않고 정확히 일치할 때만 찾음(가린 번호로 표시)
-- [x] 6단계 테스트: xUnit 단위·통합 테스트 106개(CI 자동 실행), 화면 자동 테스트 3개(FlaUI), 관리자·방·정원·통계·친구·프로필 사진 시나리오, TLS 검증, 부하 테스트(100·300·500명)
-- [x] 6단계 문서화: README, 아키텍처 문서(docs/ARCHITECTURE.md), 테스트 결과서(docs/TESTING.md), 코드 주석, CI 빌드 배지
+- [x] 6단계 테스트: xUnit 단위·통합 테스트(CI 자동 실행), 화면 자동 테스트(FlaUI), 관리자·방·정원·통계·친구·프로필 사진 시나리오, TLS 검증, 부하 테스트(100·300·500명)
+- [x] 6단계 문서화: README, 아키텍처·서버 운영 문서(PDF), 시연 시나리오, 코드 주석, CI 빌드 배지
 - [x] 서버 안정성: 연결 수·IP당 연결 수 제한, 로그인 제한 시간, 보내기 큐 용량(바이트) 제한, 프로토콜 버전 확인, 모르는 패킷 무시, 예외로 스레드가 죽지 않게 정리
 - [x] 보안·운영: 로그인·가입 속도 제한(IP별), 로그인 시간 차 공격 방지, 보관 기간 자동 정리(대화 365일·파일 180일·감사 730일, 삭제된 방의 파일은 바로), DB 백업 스크립트, DB 버전 확인
 - [x] 클라이언트 개선: 전용 송신 스레드(파일을 보내는 중에도 채팅이 바로 나감), 받은 파일에 "인터넷에서 받음" 표시, 위험 확장자 추가, 로그아웃, 창 자원(GDI) 누수 정리
@@ -202,3 +254,9 @@ TLS를 켜면 300명 기준 지연 중앙값이 129ms에서 178ms로, 메모리�
 - [x] 접속하지 않은 사람에게 1:1 메시지·파일, 로그인 때 "안 읽은 1:1" 알림, 동료 찾기(오프라인 포함)
 - [x] 전체 대화 검색(서버 DB, 내가 볼 수 있는 대화만), 결과에서 그 메시지로 이동
 - [x] 배포: publish.bat, Inno Setup 설치 파일, 새 버전 안내
+- [x] AI 비서: 로컬 LLM(Ollama) + RAG로 내가 볼 수 있는 대화 기록에 질문, 근거 인용, 권한 필터, CPU 전용 동작, 평가 도구 (기본 꺼짐)
+
+
+## 라이선스
+
+이 프로젝트는 [MIT License](LICENSE)에 따라 공개합니다.

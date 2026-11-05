@@ -1,10 +1,13 @@
 <Solution>
   <Project Path="ChatApp.Common/ChatApp.Common.csproj" />
   <Project Path="ChatApp.Server/ChatApp.Server.csproj" />
+  <Project Path="ChatApp.Rag/ChatApp.Rag.csproj" />
+  <Project Path="ChatApp.Rag.Eval/ChatApp.Rag.Eval.csproj" />
   <Project Path="ChatApp.Client/ChatApp.Client.csproj" />
   <Project Path="ChatApp.ConsoleClient/ChatApp.ConsoleClient.csproj" />
   <Project Path="ChatApp.LoadTest/ChatApp.LoadTest.csproj" />
   <Project Path="ChatApp.Tests/ChatApp.Tests.csproj" />
   <Project Path="ChatApp.UiTests/ChatApp.UiTests.csproj" />
   <Project Path="ChatApp.Service/ChatApp.Service.csproj" />
+  <Project Path="ChatApp.Service.Tests/ChatApp.Service.Tests.csproj" />
 </Solution>

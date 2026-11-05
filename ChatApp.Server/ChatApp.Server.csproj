@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ChatApp.Common\ChatApp.Common.csproj" />
+    <ProjectReference Include="..\ChatApp.Rag\ChatApp.Rag.csproj" />
   </ItemGroup>
 
   <ItemGroup>

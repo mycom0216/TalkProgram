@@ -11,22 +11,29 @@ namespace ChatApp.Common.Models;
 /// <summary>친구 찾기 방법.</summary>
 public enum FriendSearchBy
 {
-    EmployeeNo, // 아이디(사원번호)
-    Phone,      // 휴대폰 번호
+    /// <summary>아이디(사원번호)</summary>
+    EmployeeNo,
+    /// <summary>휴대폰 번호</summary>
+    Phone,
 }
 
 /// <summary>친구 찾기 요청 (클라이언트 → 서버, Packet.Data).</summary>
 public sealed class FriendSearchRequest
 {
+    /// <summary>무엇으로 찾을지(아이디 또는 휴대폰 번호).</summary>
     public FriendSearchBy By { get; set; }
+    /// <summary>찾을 값(아이디 또는 휴대폰 번호). 정확히 일치할 때만 찾는다.</summary>
     public string Query { get; set; } = "";
 }
 
 /// <summary>친구 찾기 결과 (서버 → 클라이언트). 못 찾으면 User가 null.</summary>
 public sealed class FriendSearchResult
 {
+    /// <summary>요청에서 쓴 찾기 방법.</summary>
     public FriendSearchBy By { get; set; }
+    /// <summary>요청에서 보낸 검색어.</summary>
     public string Query { get; set; } = "";
+    /// <summary>찾은 사용자. 못 찾으면 null.</summary>
     public UserInfo? User { get; set; }
     /// <summary>이미 내 친구 목록에 있음.</summary>
     public bool AlreadyFriend { get; set; }
@@ -39,6 +46,7 @@ public sealed class FriendSearchResult
 /// <summary>내 휴대폰 번호 (PhoneInfo 패킷). Phone이 빈 문자열이면 등록 안 함.</summary>
 public sealed class PhoneInfo
 {
+    /// <summary>등록된 휴대폰 번호(예: 010-1234-5678). 빈 문자열이면 등록 안 함.</summary>
     public string Phone { get; set; } = "";
 }
 

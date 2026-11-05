@@ -11,8 +11,10 @@ namespace ChatApp.Common.Models;
 /// <summary>어떤 사진인지.</summary>
 public enum PhotoKind
 {
-    Profile,    // 프로필 사진 (동그란 아바타)
-    Background, // 배경 사진 (프로필 카드 뒤)
+    /// <summary>프로필 사진 (동그란 아바타)</summary>
+    Profile,
+    /// <summary>배경 사진 (프로필 카드 뒤)</summary>
+    Background,
 }
 
 /// <summary>사진 규칙.</summary>
@@ -30,6 +32,7 @@ public static class ProfileRules
     /// <summary>배경 사진 최대 크기. Base64로 보내면 약 4/3배가 되어도 패킷 한도(1MB) 안에 들어간다.</summary>
     public const int MaxBackgroundBytes = 600 * 1024;
 
+    /// <summary>사진 종류별 최대 크기(바이트)를 돌려준다(배경 600KB, 프로필 256KB).</summary>
     public static int MaxBytes(PhotoKind kind) => kind == PhotoKind.Background ? MaxBackgroundBytes : MaxPhotoBytes;
 
     /// <summary>JPEG 또는 PNG 파일인지 (파일 맨 앞 바이트로 확인). 그림이 아닌 파일을 사진이라고 올리는 것을 막는다.</summary>
@@ -48,6 +51,8 @@ public static class ProfileRules
 /// </summary>
 public sealed class PhotoInfo
 {
+    /// <summary>어떤 사진인지(프로필 / 배경).</summary>
     public PhotoKind Kind { get; set; }
+    /// <summary>사진 버전(바꾼 시각 숫자, 0 = 사진 없음). 요청할 때는 쓰지 않는다.</summary>
     public long Version { get; set; }
 }

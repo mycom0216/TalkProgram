@@ -6,17 +6,23 @@ namespace ChatApp.Common.Models;
 /// </summary>
 public enum Presence
 {
-    Online,       // 온라인 (초록)
-    Away,         // 자리 비움 (노랑) - 10분 동안 입력이 없으면 자동으로 바뀜
-    Busy,         // 회의 중 (빨강)
-    DoNotDisturb, // 방해 금지 (빨강) - 알림 창·소리를 띄우지 않음
+    /// <summary>온라인 (초록)</summary>
+    Online,
+    /// <summary>자리 비움 (노랑) - 10분 동안 입력이 없으면 자동으로 바뀜</summary>
+    Away,
+    /// <summary>회의 중 (빨강)</summary>
+    Busy,
+    /// <summary>방해 금지 (빨강) - 알림 창·소리를 띄우지 않음</summary>
+    DoNotDisturb,
 }
 
 /// <summary>내 상태 바꾸기 (클라이언트 → 서버, StatusUpdate 패킷의 Data).</summary>
 public sealed class StatusUpdate
 {
+    /// <summary>상태 메시지 최대 글자 수(60).</summary>
     public const int MaxMessageLength = 60;
 
+    /// <summary>바꿀 접속 상태(기본값 Online).</summary>
     public Presence Presence { get; set; } = Presence.Online;
 
     /// <summary>상태 메시지 (예: "오후 반차", "내선 1234"). null이면 바꾸지 않음, ""이면 지움.</summary>

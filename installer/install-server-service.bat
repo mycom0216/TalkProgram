@@ -39,6 +39,20 @@ if not exist "%SERVER_DIR%\appsettings.json" (
   goto :fail
 )
 
+rem 2-1) 비밀이 든 파일(DB 비밀번호가 있는 appsettings.json, 개인 키가 있는 certs)은 SYSTEM과 관리자만 읽게 한다.
+rem      서비스는 SYSTEM 계정으로 돌므로 서버 동작에는 영향이 없다. 상속된 권한(일반 사용자 읽기 등)은 끊는다.
+rem      *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators (이름 대신 SID를 써서 한글 Windows에서도 동작)
+icacls "%SERVER_DIR%\appsettings.json" /inheritance:r /grant:r "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" >nul
+if errorlevel 1 (
+  echo [경고] appsettings.json 접근 권한을 제한하지 못했습니다. 관리자만 읽을 수 있게 직접 설정하세요.
+) else (
+  echo [보안] appsettings.json을 SYSTEM과 관리자만 읽도록 제한했습니다.
+)
+if exist "%SERVER_DIR%\certs" (
+  icacls "%SERVER_DIR%\certs" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T >nul
+  echo [보안] certs 폴더도 SYSTEM과 관리자만 읽도록 제한했습니다.
+)
+
 rem 3) 이미 있으면 먼저 지운다 (다시 설치·업데이트)
 sc.exe query "%SERVICE_NAME%" >nul 2>&1
 if not errorlevel 1 (

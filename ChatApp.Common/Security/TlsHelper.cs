@@ -36,6 +36,7 @@ public sealed class UntrustedCertificateException : AuthenticationException
     /// </summary>
     public bool Changed { get; }
 
+    /// <summary>지문·주체 이름·지문 변경 여부로 예외를 만든다. changed 값에 따라 메시지가 달라진다.</summary>
     public UntrustedCertificateException(string fingerprint, string subject, bool changed)
         : base(changed ? "서버 인증서가 예전과 다릅니다." : "처음 접속하는 서버의 인증서입니다.")
     {
@@ -45,6 +46,7 @@ public sealed class UntrustedCertificateException : AuthenticationException
     }
 }
 
+/// <summary>TLS 연결 도우미. 서버 인증서 지문 계산·정규화와 클라이언트 쪽 TLS 핸드셰이크를 맡는다.</summary>
 public static class TlsHelper
 {
     /// <summary>TLS 핸드셰이크(암호화 협상) 제한 시간. 이 안에 끝나지 않으면 연결을 포기한다.</summary>
