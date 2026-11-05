@@ -85,6 +85,7 @@ public sealed class PacketHandler
     public ServerLogger Log { get; }
     private readonly FriendService _friendService;
     private readonly ProfileService _profileService;
+    private readonly AiAssistantService _ai;
 
     /// <summary>필요한 부품을 받아 방·메시지·친구·프로필 서비스를 만들어 연결한다.</summary>
     public PacketHandler(SessionManager sessions, RoomManager rooms, AuthService auth, RoomRepository roomRepository,
@@ -104,6 +105,7 @@ public sealed class PacketHandler
         _messageService = new MessageService(sessions, rooms, _roomService, messages, messageRepository, users, audit, log);
         _friendService = new FriendService(sessions, users, log);
         _profileService = new ProfileService(users, config.UploadRoot, log, BroadcastUserList);
+        _ai = AiAssistantService.Create(config.Ai, messageRepository, rooms, log);
     }
 
     /// <summary>패킷 하나를 처리한다. 로그인 전·임시 비밀번호 상태에서는 허용된 종류만 통과시키고, 나머지는 종류에 맞는 서비스로 보낸다. DB 오류는 여기서 잡아 응답한다.</summary>
@@ -153,6 +155,9 @@ public sealed class PacketHandler
                 case PacketType.HistoryReq: _messageService.HandleHistoryRequest(session, packet); break;
                 case PacketType.SearchReq: _messageService.HandleSearch(session, packet); break;
                 case PacketType.DirectoryReq: _messageService.HandleDirectory(session); break;
+
+                // AI 비서 (로컬 LLM + RAG)
+                case PacketType.AiAskReq: _ai.HandleAsk(session, packet); break;
 
                 // 방
                 case PacketType.RoomListReq: session.Send(CreateRoomListPacket(session.User!.EmployeeNo)); break;

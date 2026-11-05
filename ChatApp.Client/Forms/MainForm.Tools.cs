@@ -77,6 +77,21 @@ public sealed partial class MainForm
         }
     }
 
+    /// <summary>AI 비서 창 열기 (이미 열려 있으면 앞으로). 서버에서 AI 기능이 꺼져 있으면 질문할 때 안내가 온다.</summary>
+    private void OpenAiAssistant()
+    {
+        if (_aiForm is null || _aiForm.IsDisposed)
+        {
+            _aiForm = new AiAskForm(_client);
+            _aiForm.FormClosed += (_, _) => _aiForm = null;
+            _aiForm.Show();
+        }
+        else
+        {
+            BringToFront(_aiForm);
+        }
+    }
+
     /// <summary>검색 결과를 더블클릭 → 그 대화창을 열고, 불러온 대화 안에 있으면 그 메시지로 이동한다.</summary>
     private void OpenSearchHit(SearchHit hit)
     {

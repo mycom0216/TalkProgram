@@ -230,4 +230,10 @@ public enum PacketType
     ProfileReq,
     /// <summary>프로필 정보 (Target = 사원번호, Data = UserInfo / 없는 계정이면 Success=false + Body)</summary>
     ProfileRes,
+
+    // AI 비서 (서버의 로컬 LLM이 내가 볼 수 있는 대화만 근거로 답한다. AI 기능이 꺼진 서버는 안내만 돌려준다)
+    /// <summary>AI 비서에게 질문 (Data = AiAskRequest)</summary>
+    AiAskReq,
+    /// <summary>AI 비서 답변 (Data = AiAnswer / 실패하면 Success=false + Body = 이유)</summary>
+    AiAskRes,
 }

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    사내톡 AI 비서의 RAG 엔진. 외부 NuGet 패키지 없이 .NET 기본 라이브러리만 쓴다.
+    (청킹 → BM25 + 벡터 하이브리드 검색 → 권한 필터 → 로컬 LLM 답변 + 출처 인용)
+    서버(ChatApp.Server)가 참조하고, 평가 도구(ChatApp.Rag.Eval)와 테스트가 같은 코드를 그대로 쓴다.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 테스트가 IsYes 같은 내부 규칙을 직접 확인할 수 있게 -->
+    <InternalsVisibleTo Include="ChatApp.Tests" />
+  </ItemGroup>
+
+</Project>

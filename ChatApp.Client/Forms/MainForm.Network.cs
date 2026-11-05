@@ -295,7 +295,8 @@ public sealed partial class MainForm
             case PacketType.UnreadDirect: HandleUnreadDirect(packet); break;
             case PacketType.SearchRes:
             case PacketType.Directory:
-                break; // 검색 창·사람 고르기 창이 직접 받는다
+            case PacketType.AiAskRes:
+                break; // 검색 창·사람 고르기 창·AI 비서 창이 직접 받는다
             case PacketType.SystemMsg: HandleSystem(packet); break;
             case PacketType.RoomRes: HandleRoomResponse(packet); break;
             case PacketType.RoomLeft: HandleRoomLeft(packet); break;

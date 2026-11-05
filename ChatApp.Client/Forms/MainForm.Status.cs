@@ -92,6 +92,7 @@ public sealed partial class MainForm
             _statusMenu.Items.Add("관리자 메뉴...", null, (_, _) => OpenAdmin(showPending: false));
         _statusMenu.Items.Add(new ToolStripSeparator());
         _statusMenu.Items.Add("전체 대화 검색...", null, (_, _) => OpenSearch());
+        _statusMenu.Items.Add("AI 비서 (대화 기록에 질문)...", null, (_, _) => OpenAiAssistant());
         _statusMenu.Items.Add("동료 찾기 (오프라인 포함)...", null, (_, _) => FindPeople());
         _statusMenu.Items.Add("친구 추가 (아이디·휴대폰 번호)...", null, (_, _) => OpenAddFriend());
         _statusMenu.Items.Add(new ToolStripSeparator());

@@ -147,6 +147,7 @@ public sealed partial class MainForm : Form
     // ── 그 밖의 창·정보 ──
     private readonly Dictionary<string, UserInfo> _knownPeers = []; // 사원번호 → 사람 (접속하지 않은 1:1 상대 표시용)
     private SearchForm? _searchForm;
+    private AiAskForm? _aiForm;
     private ImageViewerForm? _imageViewer;
     private Conversation? _imageViewerConversation;
     private List<ChatItem> _imageViewerItems = [];

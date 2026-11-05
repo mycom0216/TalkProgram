@@ -465,6 +465,36 @@ public sealed class MessageRepository(Db db)
         ? "F:" + file.FileId
         : "M:" + row.Item.MessageId.ToString("D20", System.Globalization.CultureInfo.InvariantCulture);
 
+    // ───────── AI 비서용 색인 읽기 ─────────
+
+    /// <summary>색인할 메시지 1줄. RoomId가 null이면 1:1(SenderNo ↔ ReceiverNo).</summary>
+    public sealed record IndexLine(long Id, int? RoomId, string SenderNo, string? ReceiverNo, string SenderName, string Content, DateTime SentAt);
+
+    /// <summary>
+    /// AI 비서가 색인할 최근 메시지를 읽는다 (삭제되지 않은 채팅·1:1만, 시스템 알림 제외). 오래된 것 → 최근 순서.
+    /// [왜] 삭제된 메시지는 검색처럼 AI 근거에서도 빠져야 한다(지워 달라고 한 내용이 답변에 나오면 안 된다).
+    /// </summary>
+    public List<IndexLine> LoadForIndex(int limit)
+    {
+        using DbConnection conn = db.Open();
+        using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT m.message_id, m.room_id, m.sender_no, m.receiver_no, COALESCE(CONCAT(u.name, ' ', u.position), m.sender_no), m.content, m.sent_at
+            FROM messages m LEFT JOIN users u ON u.employee_no = m.sender_no
+            WHERE m.deleted_at IS NULL AND m.msg_type IN ('CHAT', 'WHISPER')
+            ORDER BY m.sent_at DESC, m.message_id DESC
+            LIMIT @limit
+            """;
+        cmd.AddParam("@limit", limit);
+        var rows = new List<IndexLine>();
+        using DbDataReader r = cmd.ExecuteReader();
+        while (r.Read())
+            rows.Add(new IndexLine(r.GetInt64(0), r.IsDBNull(1) ? null : r.GetInt32(1), r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3),
+                                   r.GetString(4), r.GetString(5), Db.AsUtc(r.GetDateTime(6))));
+        rows.Reverse();
+        return rows;
+    }
+
     // ───────── 검색 ─────────
 
     /// <summary>

@@ -174,6 +174,9 @@ public sealed class ServerConfig
     /// <summary>선택적 Active Directory/LDAP 인증 설정. LDAPS(SSL)는 항상 사용한다.</summary>
     public LdapConfig Ldap { get; set; } = new();
 
+    /// <summary>AI 비서(로컬 LLM + RAG) 설정. 기본은 꺼짐: 대화 내용을 색인하는 기능이라 관리자가 일부러 켜야 한다.</summary>
+    public AiConfig Ai { get; set; } = new();
+
     /// <summary>appsettings.json을 읽어 설정을 만들고 환경 변수 덮어쓰기를 적용한다. 내용이 JSON null이면 InvalidDataException을 던진다.</summary>
     public static ServerConfig Load(string path)
     {
@@ -223,6 +226,50 @@ public sealed class TlsConfig
 
     /// <summary>인증서 경로(CertificatePath)를 서버 exe 폴더 기준 절대 경로로 바꾼 값.</summary>
     public string CertificateFullPath => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, CertificatePath));
+}
+
+/// <summary>appsettings.json의 "Ai" 항목 (대화 기록 질의응답 AI 비서).</summary>
+public sealed class AiConfig
+{
+    /// <summary>true면 AI 비서를 켠다. 기본 false (secure by default: 대화 색인은 명시적으로 켠 경우에만).</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Ollama 주소. 같은 PC(localhost)를 권장한다: 대화 내용이 서버 밖으로 나가지 않는다.</summary>
+    public string OllamaUrl { get; set; } = "http://localhost:11434";
+
+    /// <summary>임베딩 모델 (한국어가 되는 다국어 모델: embeddinggemma, bge-m3 등).</summary>
+    public string EmbedModel { get; set; } = "embeddinggemma";
+
+    /// <summary>답변 생성 모델. CPU 16GB급 PC에서는 3~8B 4비트 양자화 모델이 현실적이다.</summary>
+    public string ChatModel { get; set; } = "kanana2:3b";
+
+    /// <summary>true면 GPU도 쓴다. 기본 false(CPU만): 구형·저VRAM GPU는 CUDA 오류가 나거나 이득이 없다.</summary>
+    public bool UseGpu { get; set; }
+
+    /// <summary>
+    /// 질문과 의미 유사도(코사인)가 이보다 낮은 대화 조각은 근거로 쓰지 않는다. 모델마다 달라 평가 도구(ChatApp.Rag.Eval)로 정한다.
+    /// 기본 0.30은 "아주 동떨어진 것만 거르는" 느슨한 값이다. embeddinggemma로 잰 결과 답 있는 질문(최소 0.33)과
+    /// 답 없는 질문(최대 0.50)의 유사도가 겹쳐서, 높게 잡으면 맞는 질문까지 거절한다. 나머지 거절은 LLM의 "찾을 수 없습니다"에 맡긴다.
+    /// </summary>
+    public double MinCosine { get; set; } = 0.30;
+
+    /// <summary>true(기본)면 답을 만들기 전에 "근거에 답이 있는가"를 LLM으로 한 번 더 확인해, 근거 없는 답(환각)을 줄인다. 질문당 LLM 호출이 1번 늘어난다.</summary>
+    public bool VerifyEvidence { get; set; } = true;
+
+    /// <summary>색인에 넣는 최근 메시지 수 상한. 클수록 첫 색인이 오래 걸린다(CPU 임베딩).</summary>
+    public int MaxIndexedMessages { get; set; } = 20000;
+
+    /// <summary>색인을 이 분 수보다 오래되면 질문이 들어올 때 새로 만든다 (바뀐 대화만 임베딩하므로 보통 빠르다).</summary>
+    public int RefreshMinutes { get; set; } = 10;
+
+    /// <summary>한 사람이 질문을 연달아 보낼 수 있는 최소 간격(초). CPU 추론은 한 번에 한 질문만 처리하므로 독점을 막는다.</summary>
+    public int CooldownSeconds { get; set; } = 10;
+
+    /// <summary>대기열이 이만큼 차면 새 질문을 "바쁨"으로 거절한다.</summary>
+    public int MaxQueue { get; set; } = 3;
+
+    /// <summary>임베딩 캐시 파일 (상대 경로면 서버 exe 폴더 기준). 서버를 다시 켜도 안 바뀐 대화는 다시 임베딩하지 않는다.</summary>
+    public string CacheFile { get; set; } = "ai-embeddings.bin";
 }
 
 /// <summary>appsettings.json의 "Ldap" 항목 (Active Directory/LDAP 로그인 설정).</summary>
